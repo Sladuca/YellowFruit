@@ -7,6 +7,34 @@ code for generating the HTML stats report.
 var _ = require('lodash');
 var fs = require('fs');
 var Path = require('path');
+const TOOLTIPS = {
+  teamUG: 'Undergraduate status',
+  teamD2: 'Division 2 status',
+  ppg: 'Points per game',
+  papg: 'Points against per game',
+  mrg: 'Average margin of victory',
+  pp20: 'Points per 20 tossups heard',
+  pap20: 'Points against per 20 tossups heard',
+  mrg20: 'Point differential per 20 tossups heard',
+  tuh: 'Tossups heard',
+  pptuh: 'Points per tossup heard',
+  pPerN: 'Powers per neg',
+  gPerN: 'Gets (powers + tens) per neg',
+  bHeard: 'Bonuses heard',
+  bPts: 'Bonus points',
+  ppb: 'Points per bonus',
+  bbHeard: 'Bouncebacks heard (in 3-part bonus equivalents)',
+  bbPts: 'Points scored on bouncebacks',
+  ppbb: 'Points per three bounceback parts',
+  playerUG: 'Undergraduate status',
+  playerD2: 'Division 2 status',
+  gamesPlayed: 'Games played',
+  round: 'Round No.',
+  ppgPerTeam: 'Points per game, per team',
+  pp20PerTeam: 'Points per 20 tossups heard, per team',
+  tuPtsPTu: 'Average number of points scored on each tossup heard',
+  phaseRecord: ['Record in the ', ' stage of the tournament. Teams are ranked by this record.']
+}
 
 /*---------------------------------------------------------
 Convert string to number, where '' is zero.
@@ -23,26 +51,64 @@ function formatRate(r, precision) {
   return isNaN(r) ? '&mdash;&ensp;' : r.toFixed(precision);
 }
 
+// include column for team undergrad status?
+function showTeamUG(rptConfig) { return rptConfig.teamUG; }
+
+// include column for team div. 2 status?
+function showTeamD2(rptConfig) { return rptConfig.teamD2; }
+
+// include the combined UG/D2 column?
+function showTeamCombined(rptConfig) { return rptConfig.teamCombinedStatus; }
+
+// include the column for W-L record in the grouping phase?
+function showPhaseRecord(rptConfig) { return rptConfig.phaseRecord; }
+
+// track ppg (rather than pp20TUH)?
+function showPpg(rptConfig) { return rptConfig.ppgOrPp20 == 'ppg'; }
+
+// track pp20tuh
+function showPp20(rptConfig) { return rptConfig.ppgOrPp20 == 'pp20'; }
+
+// include column for pts against?
+function showPapg(rptConfig) { return rptConfig.papg; }
+
+// include column for average margin?
+function showMargin(rptConfig) { return rptConfig.margin; }
+
 // include column for powers?
-function usePowers(settings) { return settings.powers != 'none'; }
+function showPowers(settings) { return settings.powers != 'none'; }
 
 // include column for negs?
-function useNegs(settings) { return settings.negs == 'yes'; }
+function showNegs(settings) { return settings.negs == 'yes'; }
+
+// include column pts per tuh?
+function showPptuh(rptConfig) { return rptConfig.pptuh; }
 
 // include column for powers per neg?
-function usePPerN(settings) { return usePowers(settings) && useNegs(settings); }
+function showPPerN(settings, rptConfig) {
+  return showPowers(settings) && showNegs(settings) && rptConfig.pPerN;
+}
 
 // include column for gets per neg?
-function useGPerN(settings) { return useNegs(settings); }
+function showGPerN(settings, rptConfig) { return showNegs(settings) && rptConfig.gPerN; }
 
 // include columns for bonus points and PPB?
-function useBonus(settings) { return settings.bonuses != 'none'; }
+function showBonus(settings) { return settings.bonuses != 'none'; }
 
 // include columns for bounceback points and PPBB?
-function useBb(settings) { return settings.bonuses == 'yesBb'; }
+function showBb(settings) { return settings.bonuses == 'yesBb'; }
 
 // show players' year/grade?
-function showYear(settings) { return settings.yearDisplay; }
+function showPlayerYear(rptConfig) { return rptConfig.playerYear; }
+
+// show players' UG status?
+function showPlayerUG(rptConfig) { return rptConfig.playerUG; }
+
+// show player D2 status?
+function showPlayerD2(rptConfig) { return rptConfig.playerD2; }
+
+// include the combined UG/D2 column?
+function showPlayerCombined(rptConfig) { return rptConfig.playerCombinedStatus; }
 
 /*---------------------------------------------------------
 Number of games played, including forfeits.
@@ -222,12 +288,14 @@ API to generate table cell <td> tags (with newline at the end)
   text: inner text
   align: 'left', etc.
   bold: boolean
+  title: hover text, to explain stat abbreviations
   style: inline CSS. Don't include quotes around it
 ---------------------------------------------------------*/
-function tdTag(text, align, bold, style) {
+function tdTag(text, align, bold, title, style) {
   var html = '<td';
   if(align != null) { html += ' align=' + align; }
   if(style != null) { html += ' style="' + style + '"'; }
+  if(title != null) { html += ' title="' + title + '"'; }
   html += '>';
   if(bold) { html += '<b>'; }
   html += text;
@@ -238,43 +306,68 @@ function tdTag(text, align, bold, style) {
 /*---------------------------------------------------------
 Header row for the team standings.
 ---------------------------------------------------------*/
-function standingsHeader(settings, tiesExist) {
+function standingsHeader(settings, tiesExist, rptConfig, groupingPhase) {
   var html = '<tr>' + '\n' +
-    tdTag('Rank','left',true) +
-    tdTag('Team','left',true) +
-    tdTag('W','right',true) +
+    tdTag('Rank', 'left', true) +
+    tdTag('Team', 'left', true);
+  if(showTeamUG(rptConfig)) {
+    html += tdTag('UG', 'left', true, TOOLTIPS.teamUG);
+  }
+  if(showTeamD2(rptConfig)) {
+    html += tdTag('D2', 'left', true, TOOLTIPS.teamD2);
+  }
+  if(showTeamCombined(rptConfig)) {
+    html += tdTag('', 'left', true);
+  }
+  html += tdTag('W','right',true) +
     tdTag('L','right',true);
   if(tiesExist) {
     html += tdTag('T','right',true);
   }
-  html += tdTag('Pct','right',true) +
-    tdTag('PPG','right',true) +
-    tdTag('PAPG','right',true) +
-    tdTag('Mrg','right',true);
-  if(usePowers(settings)) {
+  html += tdTag('Pct','right',true);
+  if(showPhaseRecord(rptConfig)) {
+    html += tdTag('Stage', 'right', true, TOOLTIPS.phaseRecord[0] + groupingPhase + TOOLTIPS.phaseRecord[1]);
+  }
+  if(showPpg(rptConfig)) {
+    html +=  tdTag('PPG','right',true, TOOLTIPS.ppg);
+  }
+  else { // tracking pp20TUH instead
+    html +=  tdTag('PP20','right',true, TOOLTIPS.pp20);
+  }
+  if(showPapg(rptConfig)) {
+    if(showPpg(rptConfig)) { html += tdTag('PAPG','right',true, TOOLTIPS.papg); }
+    else { html += tdTag('PAP20','right',true, TOOLTIPS.pap20); }
+  }
+  if(showMargin(rptConfig)) {
+    if(showPpg(rptConfig)) { html += tdTag('Mrg','right',true, TOOLTIPS.mrg); }
+    else { html += tdTag('Mrg', 'right', true, TOOLTIPS.mrg20); }
+  }
+  if(showPowers(settings)) {
     html += tdTag(powerValue(settings),'right',true);
   }
   html += tdTag('10','right',true);
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag('-5','right',true);
   }
-  html += tdTag('TUH','right',true) +
-    tdTag('PPTUH','right',true);
-  if(usePPerN(settings)) {
-    html += tdTag('Pwr/N','right',true);
+  html += tdTag('TUH','right',true, TOOLTIPS.tuh);
+  if(showPptuh(rptConfig)) {
+    html += tdTag('PPTUH','right',true, TOOLTIPS.pptuh);
   }
-  if(useGPerN(settings)) {
-    html += tdTag('G/N','right',true);
+  if(showPPerN(settings, rptConfig)) {
+    html += tdTag('Pwr/N','right',true, TOOLTIPS.pPerN);
   }
-  if(useBonus(settings)) {
-    html += tdTag('BHrd','right',true) +
-      tdTag('BPts','right',true) +
-      tdTag('PPB','right',true);
+  if(showGPerN(settings, rptConfig)) {
+    html += tdTag('G/N','right',true, TOOLTIPS.gPerN);
   }
-  if(useBb(settings)) {
-    html += tdTag('BBHrd','right',true) +
-      tdTag('BBPts','right',true) +
-      tdTag('PPBB','right',true);
+  if(showBonus(settings)) {
+    html += tdTag('BHrd','right',true, TOOLTIPS.bHeard) +
+      tdTag('BPts','right',true, TOOLTIPS.bPts) +
+      tdTag('PPB','right',true, TOOLTIPS.ppb);
+  }
+  if(showBb(settings)) {
+    html += tdTag('BBHrd','right',true, TOOLTIPS.bbHeard) +
+      tdTag('BBPts','right',true, TOOLTIPS.bbPts) +
+      tdTag('PPBB','right',true, TOOLTIPS.ppbb);
   }
   html += '</tr>' + '\n';
   return html;
@@ -283,41 +376,71 @@ function standingsHeader(settings, tiesExist) {
 /*---------------------------------------------------------
 One row in the team standings
 ---------------------------------------------------------*/
-function standingsRow(teamEntry, rank, fileStart, settings, tiesExist) {
+function standingsRow(teamEntry, rank, fileStart, settings, tiesExist, rptConfig) {
   var linkId = teamEntry.teamName.replace(/\W/g, '');
   var rowHtml = '<tr>';
   rowHtml += tdTag(rank,'left');
   rowHtml += tdTag('<a HREF=' + fileStart + 'teamdetail.html#' + linkId + '>' + teamEntry.teamName + '</a>','left');
+  if(showTeamUG(rptConfig)) {
+    rowHtml += tdTag(teamEntry.teamUGStatus ? 'UG' : '', 'left');
+  }
+  if(showTeamD2(rptConfig)) {
+    rowHtml += tdTag(teamEntry.teamD2Status ? 'D2' : '', 'left');
+  }
+  if(showTeamCombined(rptConfig)) {
+    var tmComb = '';
+    if(teamEntry.teamD2Status) { tmComb = 'D2'; }
+    else if(teamEntry.teamUGStatus) { tmComb = 'UG'; }
+    rowHtml += tdTag(tmComb, 'left');
+  }
   rowHtml += tdTag(teamEntry.wins,'right');
   rowHtml += tdTag(teamEntry.losses,'right');
   if(tiesExist) {
     rowHtml += tdTag(teamEntry.ties,'right');
   }
   rowHtml += tdTag(teamEntry.winPct,'right');
-  rowHtml += tdTag(teamEntry.ppg,'right');
-  rowHtml += tdTag(teamEntry.papg,'right');
-  rowHtml += tdTag(teamEntry.margin,'right');
-  if(usePowers(settings)) {
+  if(showPhaseRecord(rptConfig)) {
+    var phaseRecord = teamEntry.phaseWins + '-' + teamEntry.phaseLosses;
+    if(teamEntry.phaseTies > 0) { phaseRecord += teamEntry.phaseTies; }
+    rowHtml += tdTag(phaseRecord, 'right');
+  }
+  if(showPpg(rptConfig)) {
+    rowHtml += tdTag(teamEntry.ppg,'right');
+  }
+  else {  //pp20TUH
+    rowHtml += tdTag(teamEntry.pp20, 'right');
+  }
+  if(showPapg(rptConfig)) {
+    if(showPpg(rptConfig)) { rowHtml += tdTag(teamEntry.papg,'right'); }
+    else { rowHtml += tdTag(teamEntry.pap20, 'right'); }
+  }
+  if(showMargin(rptConfig)) {
+    if(showPpg(rptConfig)) { rowHtml += tdTag(teamEntry.margin,'right'); }
+    else { rowHtml += tdTag(teamEntry.mrg20, 'right'); }
+  }
+  if(showPowers(settings)) {
     rowHtml += tdTag(teamEntry.powers,'right');
   }
   rowHtml += tdTag(teamEntry.tens,'right');
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     rowHtml += tdTag(teamEntry.negs,'right');
   }
   rowHtml += tdTag(teamEntry.tuh,'right');
-  rowHtml += tdTag(teamEntry.ppth,'right');
-  if(usePPerN(settings)) {
+  if(showPptuh(rptConfig)) {
+    rowHtml += tdTag(teamEntry.ppth,'right');
+  }
+  if(showPPerN(settings, rptConfig)) {
     rowHtml += tdTag(teamEntry.pPerN,'right');
   }
-  if(useGPerN(settings)) {
+  if(showGPerN(settings, rptConfig)) {
     rowHtml += tdTag(teamEntry.gPerN,'right');
   }
-  if(useBonus(settings)) {
+  if(showBonus(settings)) {
     rowHtml += tdTag(teamEntry.bHeard,'right');
     rowHtml += tdTag(teamEntry.bPts,'right');
     rowHtml += tdTag(teamEntry.ppb,'right');
   }
-  if(useBb(settings)) {
+  if(showBb(settings)) {
     rowHtml += tdTag(bbHrdDisplay(teamEntry.bbHeard),'right');
     rowHtml += tdTag(teamEntry.bbPts,'right');
     rowHtml += tdTag(teamEntry.ppbb,'right');
@@ -328,14 +451,16 @@ function standingsRow(teamEntry, rank, fileStart, settings, tiesExist) {
 /*---------------------------------------------------------
 Gather data for the team standings
 ---------------------------------------------------------*/
-function compileStandings(myTeams, myGames, phase, groupingPhase, settings) {
+function compileStandings(myTeams, myGames, phase, groupingPhase, settings, rptConfig) {
   var standings = myTeams.map(function(item, index) {
     var obj =
       { teamName: item.teamName,
+        teamUGStatus: item.teamUGStatus, teamD2Status: item.teamD2Status,
         division: groupingPhase != null ? item.divisions[groupingPhase] : null,
-        wins: 0, losses: 0, ties: 0,
-        winPct: 0,
+        wins: 0, losses: 0, ties: 0, winPct: 0,
+        phaseWins: 0, phaseLosses: 0, phaseTies: 0, phaseWinPct: 0,
         ppg: 0, papg: 0, margin: 0,
+        pp20: 0, pap20: 0, mrg20: 0,
         powers: 0, tens: 0, negs: 0,
         tuh: 0,
         ppth: 0,
@@ -354,6 +479,7 @@ function compileStandings(myTeams, myGames, phase, groupingPhase, settings) {
 
   for(var i in myGames) {
     var g = myGames[i];
+    var gameInGroupingPhase = g.phases.includes(groupingPhase);
     if(phase == 'all' || g.phases.includes(phase)) {
       var team1Line = _.find(standings, function (o) {
         return o.teamName == g.team1;
@@ -366,19 +492,35 @@ function compileStandings(myTeams, myGames, phase, groupingPhase, settings) {
         team2Line.losses += 1;
         team1Line.forfeits += 1;
         team2Line.forfeits += 1;
+        if(gameInGroupingPhase) {
+          team1Line.phaseWins += 1;
+          team2Line.phaseLosses += 1;
+        }
       }
       else { //not a forfeit
         if(+g.score1 > +g.score2) {
           team1Line.wins += 1;
           team2Line.losses += 1;
+          if(gameInGroupingPhase) {
+            team1Line.phaseWins += 1;
+            team2Line.phaseLosses += 1;
+          }
         }
         else if(+g.score2 > +g.score1) {
           team1Line.losses += 1;
           team2Line.wins += 1;
+          if(gameInGroupingPhase) {
+            team1Line.phaseLosses += 1;
+            team2Line.phaseWins += 1;
+          }
         }
         else { //it's a tie
           team1Line.ties += 1;
           team2Line.ties += 1;
+          if(gameInGroupingPhase) {
+            team1Line.phaseTies += 1;
+            team2Line.phaseTies += 1;
+          }
         }
         team1Line.points += +g.score1;
         team2Line.points += +g.score2;
@@ -425,16 +567,24 @@ function compileStandings(myTeams, myGames, phase, groupingPhase, settings) {
     var papg = gamesPlayed == 0 ? 'inf' : (t.ptsAgainst - t.otPtsAgainst) / gamesPlayed;
     var margin = toNum(ppg - papg);
     var ppth = t.tuh == 0 ? 'inf' : (t.points - t.otPts) / (t.tuh - t.ottuh);
+    var pp20 = t.tuh == 0 ? 'inf' : 20*ppth;
+    var pap20 = t.tuh == 0 ? 'inf' : 20*(t.ptsAgainst - t.otPtsAgainst) / (t.tuh - t.ottuh);
+    var mrg20 = t.tuh == 0 ? 'inf' : toNum(pp20 - pap20);
     var pPerN = t.negs == 0 ? 'inf' : t.powers / t.negs;
     var gPerN = t.negs == 0 ? 'inf' : (t.powers + t.tens) / t.negs;
     var ppb = t.bHeard == 0 ? 'inf' : t.bPts / t.bHeard;
     var ppbb = t.bbHeard == 0 ? 'inf' : t.bbPts / bbHrdToFloat(t.bbHeard);
+    var phaseGames = t.phaseWins + t.phaseLosses + t.phaseTies;
 
     if(winPct == 1) { t.winPct = '1.000'; }
     else{ t.winPct = winPct.toFixed(3).substr(1); } //remove leading zero
+    t.phaseWinPct = phaseGames == 0 ? 0 : (t.phaseWins + t.phaseTies/2) / phaseGames;
     t.ppg = formatRate(ppg, 1);
     t.papg = formatRate(papg, 1);
     t.margin = margin.toFixed(1);
+    t.pp20 = formatRate(pp20, 1);
+    t.pap20 = formatRate(pap20, 1);
+    t.mrg20 = formatRate(mrg20, 1);
     t.ppth = formatRate(ppth, 2);
     t.pPerN = formatRate(pPerN, 2);
     t.gPerN = formatRate(gPerN, 2);
@@ -442,49 +592,68 @@ function compileStandings(myTeams, myGames, phase, groupingPhase, settings) {
     t.ppbb = formatRate(ppbb, 2);
   }
 
+  if(showPhaseRecord(rptConfig)) {
+    return _.orderBy(standings, ['phaseWinPct', 'winPct', (t)=>{return toNum(t.ppg)}], ['desc', 'desc', 'desc']);
+  }
   return _.orderBy(standings, ['winPct', (t)=>{return toNum(t.ppg)}], ['desc', 'desc']);
 } //compileStandings
 
 /*---------------------------------------------------------
 The header for the table in the individual standings.
 ---------------------------------------------------------*/
-function individualsHeader(usingDivisions, settings) {
+function individualsHeader(usingDivisions, settings, rptConfig) {
   var html = '<tr>' + '\n' +
     tdTag('Rank', 'left', true) +
     tdTag('Player', 'left', true);
-  if(showYear(settings)) {
+  if(showPlayerYear(rptConfig)) {
     html += tdTag('Year', 'left', true);
+  }
+  if(showPlayerUG(rptConfig)) {
+    html += tdTag('UG', 'left', true, TOOLTIPS.playerUG);
+  }
+  if(showPlayerD2(rptConfig)) {
+    html += tdTag('D2', 'left', true, TOOLTIPS.playerD2);
+  }
+  if(showPlayerCombined(rptConfig)) {
+    html += tdTag('', 'left', true);
   }
   html += tdTag('Team', 'left', true);
   if(usingDivisions) {
     html += tdTag('Division', 'left', true);
   }
-  html += tdTag('GP', 'left', true);
-  if(usePowers(settings)) {
+  html += tdTag('GP', 'right', true, TOOLTIPS.gamesPlayed);
+  if(showPowers(settings)) {
     html += tdTag(powerValue(settings), 'right', true);
   }
   html += tdTag('10', 'right', true);
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag('-5', 'right', true);
   }
-  html += tdTag('TUH', 'right', true) +
-    tdTag('PPTUH', 'right', true);
-  if(usePPerN(settings)) {
-    html += tdTag('Pwr/N', 'right', true);
+  html += tdTag('TUH', 'right', true, TOOLTIPS.tuh);
+  if(showPptuh(rptConfig)) {
+    html += tdTag('PPTUH', 'right', true, TOOLTIPS.pptuh);
   }
-  if(useGPerN(settings)) {
-    html += tdTag('G/N', 'right', true);
+  if(showPPerN(settings, rptConfig)) {
+    html += tdTag('Pwr/N', 'right', true, TOOLTIPS.pPerN);
   }
-  html += tdTag('Pts', 'right', true) +
-    tdTag('PPG', 'right', true) +
-    '</tr>' + '\n';
+  if(showGPerN(settings, rptConfig)) {
+    html += tdTag('G/N', 'right', true, TOOLTIPS.gPerN);
+  }
+  html += tdTag('Pts', 'right', true);
+  if(showPpg(rptConfig)) {
+    html += tdTag('PPG', 'right', true, TOOLTIPS.ppg);
+  }
+  else { //pts per 20tuh
+    html += tdTag('PP20', 'right', true, TOOLTIPS.pp20);
+  }
+  html += '</tr>' + '\n';
   return html;
 }
 
 /*---------------------------------------------------------
 A single row in the individual standings.
 ---------------------------------------------------------*/
-function individualsRow(playerEntry, rank, fileStart, usingDivisions, settings) {
+function individualsRow(playerEntry, rank, fileStart, usingDivisions, settings, rptConfig) {
   var playerLinkId = playerEntry.teamName.replace(/\W/g, '') + '-' +
     playerEntry.playerName.replace(/\W/g, '');
   var teamLinkId = playerEntry.teamName.replace(/\W/g, '');
@@ -492,34 +661,53 @@ function individualsRow(playerEntry, rank, fileStart, usingDivisions, settings) 
   var rowHtml = '<tr>' + '\n';
   rowHtml += tdTag(rank,'left');
   rowHtml += tdTag('<a HREF=' + fileStart + 'playerdetail.html#' + playerLinkId + '>' + playerEntry.playerName + '</a>', 'left');
-  if(showYear(settings)) {
+  if(showPlayerYear(rptConfig)) {
     rowHtml += tdTag(playerEntry.year, 'left');
+  }
+  if(showPlayerUG(rptConfig)) {
+    rowHtml += tdTag(playerEntry.undergrad ? 'UG' : '', 'left');
+  }
+  if(showPlayerD2(rptConfig)) {
+    rowHtml += tdTag(playerEntry.div2 ? 'D2' : '', 'left');
+  }
+  if(showPlayerCombined(rptConfig)) {
+    var plComb = '';
+    if(playerEntry.div2) { plComb = 'D2'; }
+    else if(playerEntry.undergrad) { plComb = 'UG'; }
+    rowHtml += tdTag(plComb, 'left');
   }
   rowHtml += tdTag('<a HREF=' + fileStart + 'teamdetail.html#' + teamLinkId + '>' + playerEntry.teamName + '</a>', 'left');
 
   if(usingDivisions) {
     var divDisplay = playerEntry.division;
     if(divDisplay == undefined) { divDisplay = '&mdash;&ensp;'; }
-    rowHtml += tdTag(divDisplay,'left');
+    rowHtml += tdTag(divDisplay, 'left');
   }
-  rowHtml += tdTag(playerEntry.gamesPlayed,'right');
-  if(usePowers(settings)) {
-    rowHtml += tdTag(playerEntry.powers,'right');
+  rowHtml += tdTag(playerEntry.gamesPlayed, 'right');
+  if(showPowers(settings)) {
+    rowHtml += tdTag(playerEntry.powers, 'right');
   }
-  rowHtml += tdTag(playerEntry.tens,'right');
-  if(useNegs(settings)) {
-    rowHtml += tdTag(playerEntry.negs,'right');
+  rowHtml += tdTag(playerEntry.tens, 'right');
+  if(showNegs(settings)) {
+    rowHtml += tdTag(playerEntry.negs, 'right');
   }
-  rowHtml += tdTag(playerEntry.tuh,'right');
-  rowHtml += tdTag(playerEntry.pptu,'right');
-  if(usePPerN(settings)) {
-    rowHtml += tdTag(playerEntry.pPerN,'right');
+  rowHtml += tdTag(playerEntry.tuh, 'right');
+  if(showPptuh(rptConfig)) {
+    rowHtml += tdTag(playerEntry.pptu, 'right');
   }
-  if(useGPerN(settings)) {
-    rowHtml += tdTag(playerEntry.gPerN,'right');
+  if(showPPerN(settings, rptConfig)) {
+    rowHtml += tdTag(playerEntry.pPerN, 'right');
   }
-  rowHtml += tdTag(playerEntry.points,'right');
-  rowHtml += tdTag(playerEntry.ppg,'right');
+  if(showGPerN(settings, rptConfig)) {
+    rowHtml += tdTag(playerEntry.gPerN, 'right');
+  }
+  rowHtml += tdTag(playerEntry.points, 'right');
+  if(showPpg(rptConfig)) {
+    rowHtml += tdTag(playerEntry.ppg, 'right');
+  }
+  else {
+    rowHtml += tdTag(playerEntry.pp20, 'right');
+  }
   return rowHtml + '</tr>' + '\n';
 }
 
@@ -534,6 +722,8 @@ function compileIndividuals(myTeams, myGames, phase, groupingPhase, settings) {
       var obj = {
         playerName: p,
         year: t.roster[p].year,
+        undergrad: t.roster[p].undergrad,
+        div2: t.roster[p].div2,
         teamName: t.teamName,
         division: groupingPhase != null ? t.divisions[groupingPhase] : null,
         gamesPlayed: 0,
@@ -545,7 +735,8 @@ function compileIndividuals(myTeams, myGames, phase, groupingPhase, settings) {
         pPerN: 0,
         gPerN: 0,
         points: 0,
-        ppg: 0
+        ppg: 0,
+        pp20: 0
       }
       individuals.push(obj);
     }
@@ -587,6 +778,7 @@ function compileIndividuals(myTeams, myGames, phase, groupingPhase, settings) {
     var totPoints = p.powers*powerValue(settings) + p.tens*10 + p.negs*negValue(settings);
     var pptu = p.tuh == 0 ? 'inf' : totPoints / p.tuh;
     var ppg = p.gamesPlayed == 0 ? 'inf' : totPoints / p.gamesPlayed;
+    var pp20 = p.tuh == 0 ? 'inf' : 20*totPoints / p.tuh;
 
     p.gamesPlayed = p.gamesPlayed.toFixed(1);
     p.pptu = formatRate(pptu, 2);
@@ -594,6 +786,7 @@ function compileIndividuals(myTeams, myGames, phase, groupingPhase, settings) {
     p.gPerN = formatRate(gPerN, 2);
     p.points = totPoints;
     p.ppg = formatRate(ppg, 2);
+    p.pp20 = formatRate(pp20, 2);
   }
 
   return _.orderBy(individuals,
@@ -642,12 +835,12 @@ function scoreboardRoundLinks(roundList, fileStart) {
 The title for each section of the scoreboard.
 ---------------------------------------------------------*/
 function scoreboardRoundHeader(roundNo,packetName) {
-  var title = 'Round ' + roundNo;
-  if(packetName != undefined && packetName != '') {
-    title += ' (Packet: ' + packetName + ')';
-  }
   var html = '<div id=round-' + roundNo + ' style="margin:-3em;position:absolute"></div>' + '\n';
-  return html + '<h2><font color=red>' + title + '</font></h2>' + '\n';
+  html += '<h2 style="display:inline-block">Round ' + roundNo + '</h2>';
+  if(packetName != undefined && packetName != '') {
+    html += '<span style=" font-style: italic; color: gray">&ensp;Packet: ' + packetName + '</span>';
+  }
+  return html += '\n';
 }
 
 /*---------------------------------------------------------
@@ -712,13 +905,13 @@ function scoreboardGameSummaries(myGames, roundNo, phase, settings, phaseColors)
           tdTag('TUH','right',true);
         var team2Header = tdTag(g.team2,'left',true) +
           tdTag('TUH','right',true);
-        if(usePowers(settings)) {
+        if(showPowers(settings)) {
           team1Header += tdTag(powerValue(settings),'right',true);
           team2Header += tdTag(powerValue(settings),'right',true);
         }
         team1Header += tdTag('10','right',true);
         team2Header += tdTag('10','right',true);
-        if(useNegs(settings)) {
+        if(showNegs(settings)) {
           team1Header += tdTag('-5','right',true);
           team2Header += tdTag('-5','right',true);
         }
@@ -735,11 +928,11 @@ function scoreboardGameSummaries(myGames, roundNo, phase, settings, phaseColors)
           var [tuh, pwr, tn, ng] = playerSlashLine(g.players1[p]);
           if(tuh <= 0) { continue; }
           playerLine += tdTag(tuh,'right');
-          if(usePowers(settings)) {
+          if(showPowers(settings)) {
             playerLine += tdTag(pwr,'right');
           }
           playerLine += tdTag(tn,'right');
-          if(useNegs(settings)) {
+          if(showNegs(settings)) {
             playerLine += tdTag(ng,'right');
           }
           playerLine += tdTag(powerValue(settings)*pwr + 10*tn + negValue(settings)*ng,'right');
@@ -751,11 +944,11 @@ function scoreboardGameSummaries(myGames, roundNo, phase, settings, phaseColors)
           var [tuh, pwr, tn, ng] = playerSlashLine(g.players2[p]);
           if(tuh <= 0) { continue; }
           playerLine += tdTag(tuh,'right');
-          if(usePowers(settings)) {
+          if(showPowers(settings)) {
             playerLine += tdTag(pwr,'right');
           }
           playerLine += tdTag(tn,'right');
-          if(useNegs(settings)) {
+          if(showNegs(settings)) {
             playerLine += tdTag(ng,'right');
           }
           playerLine += tdTag(powerValue(settings)*pwr + 10*tn + negValue(settings)*ng,'right');
@@ -779,7 +972,7 @@ function scoreboardGameSummaries(myGames, roundNo, phase, settings, phaseColors)
         html += '<br>' + '\n';
 
         // bonus conversion
-        if(useBonus(settings)) {
+        if(showBonus(settings)) {
           var bHeard = bonusesHeard(g, 1), bPts = bonusPoints(g, 1, settings);
           var ppb = bHeard == 0 ? 0 : bPts / bHeard;
           html += 'Bonuses: ' + g.team1 + ' ' + bHeard + ' heard, ' + bPts + ' pts, ' + ppb.toFixed(2) + ' PPB; ';
@@ -788,7 +981,7 @@ function scoreboardGameSummaries(myGames, roundNo, phase, settings, phaseColors)
           html += g.team2 + ' ' + bHeard + ' heard, ' + bPts + ' pts, ' + ppb.toFixed(2) + ' PPB <br>' + '\n';
         }
         // bounceback conversion
-        if(useBb(settings)) {
+        if(showBb(settings)) {
           var bbHrd = bbHeard(g, 1, settings);
           var ppbb = bbHrd.toString()=='0,0' ? 0 : g.bbPts1 / bbHrdToFloat(bbHrd);
           html += 'Bouncebacks: ' + g.team1 + ' ' +
@@ -809,37 +1002,42 @@ function scoreboardGameSummaries(myGames, roundNo, phase, settings, phaseColors)
 Header row for the table containing a team's games on the
 team detail page.
 ---------------------------------------------------------*/
-function teamDetailGameTableHeader(packetsExist,settings) {
+function teamDetailGameTableHeader(packetsExist, settings, rptConfig) {
   var html = '<tr>' + '\n' +
-    tdTag('Rd.', 'center', true) +
+    tdTag('Rd.', 'center', true, TOOLTIPS.round) +
     tdTag('Opponent', 'left', true) +
     tdTag('Result', 'left', true) +
     tdTag('PF', 'right', true) +
     tdTag('PA', 'right', true);
-  if(usePowers(settings)) {
+  if(showPowers(settings)) {
     html += tdTag(powerValue(settings), 'right', true);
   }
   html += tdTag('10', 'right', true);
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag('-5', 'right', true);
   }
-  html += tdTag('TUH', 'right', true) +
-    tdTag('PPTUH', 'right', true);
-  if(usePPerN(settings)) {
-    html += tdTag('Pwr/N', 'right', true);
+  html += tdTag('TUH', 'right', true, TOOLTIPS.tuh);
+  if(showPptuh(rptConfig)) {
+    html += tdTag('PPTUH', 'right', true, TOOLTIPS.pptuh);
   }
-  if(useGPerN(settings)) {
-    html += tdTag('G/N', 'right', true);
+  if(showPp20(rptConfig)) {
+    html += tdTag('PP20', 'right', true, TOOLTIPS.pp20);
   }
-  if(useBonus(settings)) {
-    html += tdTag('BHrd', 'right', true) +
-      tdTag('BPts', 'right', true) +
-      tdTag('PPB', 'right', true);
+  if(showPPerN(settings, rptConfig)) {
+    html += tdTag('Pwr/N', 'right', true, TOOLTIPS.pPerN);
   }
-  if(useBb(settings)) {
-    html += tdTag('BBHrd', 'right', true) +
-      tdTag('BBPts', 'right', true) +
-      tdTag('PPBB', 'right', true);
+  if(showGPerN(settings, rptConfig)) {
+    html += tdTag('G/N', 'right', true, TOOLTIPS.gPerN);
+  }
+  if(showBonus(settings)) {
+    html += tdTag('BHrd', 'right', true, TOOLTIPS.bHeard) +
+      tdTag('BPts', 'right', true, TOOLTIPS.bPts) +
+      tdTag('PPB', 'right', true, TOOLTIPS.ppb);
+  }
+  if(showBb(settings)) {
+    html += tdTag('BBHrd', 'right', true, TOOLTIPS.bbHeard) +
+      tdTag('BBPts', 'right', true, TOOLTIPS.bbPts) +
+      tdTag('PPBB', 'right', true, TOOLTIPS.ppbb);
   }
   if(packetsExist) {
     html += tdTag('Packet', 'left', true);
@@ -853,7 +1051,7 @@ A mostly-blank row in a team detail table for a forfeit.
 ---------------------------------------------------------*/
 function forfeitRow(opponent, round, result, roundStyle, emptyCols) {
   var html = '<tr>' + '\n' +
-    tdTag(round, 'center', false, roundStyle) +
+    tdTag(round, 'center', false, null, roundStyle) +
     tdTag(opponent, 'left') +
     tdTag(result, 'left') +
     tdTag('Forfeit', 'right');
@@ -871,9 +1069,14 @@ function getRoundStyle(gamePhases, phaseColors) {
   if(gamePhases.length == 1) {
     return 'background-color: ' + phaseColors[gamePhases[0]];
   }
-  else if(gamePhases.length > 1) {
+  else if(gamePhases.length == 2) {
     return 'background-image: linear-gradient(to bottom right, ' +
       phaseColors[gamePhases[0]] + ' 50%, ' + phaseColors[gamePhases[1]] + ' 51%)';
+  }
+  else if(gamePhases.length > 2) {
+    return 'background-image: linear-gradient(to bottom right, ' +
+      phaseColors[gamePhases[0]] + ' 33%, ' + phaseColors[gamePhases[1]] + ' 34%, ' +
+      phaseColors[gamePhases[1]] + ' 66%, ' + phaseColors[gamePhases[2]] + ' 67%)';
   }
   return '';
 }
@@ -886,12 +1089,12 @@ page since it doesn't use tableStyle()
 ---------------------------------------------------------*/
 function phaseLegend(phaseColors) {
   var phaseCnt = 0;
-  var html = '<table border=0' +
+  var html = '<table border=0 class="phaseLegend"' +
     ' style="bottom:20px;right:35px;position:fixed;box-shadow: 4px 4px 7px #999999;border-spacing:0;border-collapse:separate;">' + '\n';
   for(var p in phaseColors) {
     html += '<tr>' + '\n';
-    html += tdTag('&nbsp;&nbsp;&nbsp;&nbsp;', null, false, 'background-color:' + phaseColors[p] + ';padding:5px');
-    html += tdTag(p, null, false, 'background-color:white;padding:5px');
+    html += tdTag('&nbsp;&nbsp;&nbsp;&nbsp;', null, false, null, 'background-color:' + phaseColors[p] + ';padding:5px');
+    html += tdTag(p, null, false, null, 'background-color:white;padding:5px');
     html += '</tr>' + '\n';
   }
   html += '</table>' + '\n';
@@ -902,15 +1105,15 @@ function phaseLegend(phaseColors) {
 Row for a single game for a single team on the team detail
 page.
 ---------------------------------------------------------*/
-function teamDetailGameRow(game, whichTeam, packetsExist, packets, settings, phaseColors, formatRdCol, fileStart) {
+function teamDetailGameRow(game, whichTeam, packetsExist, packets, settings, phaseColors, formatRdCol, fileStart, rptConfig) {
   var opponent, opponentScore, result, score, players;
   var roundStyle = formatRdCol ? getRoundStyle(game.phases, phaseColors) : '';
 
   if(whichTeam == 1) {
     opponent = game.team2;
     if(game.forfeit) { //team1 is arbitrarily the winner of a forfeit
-      var emptyCols = 4 + usePowers(settings) + useNegs(settings) + usePPerN(settings) +
-        useGPerN(settings) + 3*useBonus(settings) + 3*useBb(settings) + packetsExist;
+      var emptyCols = 4 + showPowers(settings) + showNegs(settings) + showPPerN(settings, rptConfig) +
+        showGPerN(settings, rptConfig) + 3*showBonus(settings) + 3*showBb(settings) + packetsExist;
       return forfeitRow(opponent, game.round, 'W', roundStyle, emptyCols);
     }
     if(+game.score1 > +game.score2) { result = 'W'; }
@@ -923,8 +1126,8 @@ function teamDetailGameRow(game, whichTeam, packetsExist, packets, settings, pha
   else {
     opponent = game.team1;
     if(game.forfeit) { //team2 is arbitrarily the loser of a forfeit
-      var emptyCols = 4 + usePowers(settings) + useNegs(settings) + usePPerN(settings) +
-        useGPerN(settings) + 3*useBonus(settings) + 3*useBb(settings) + packetsExist;
+      var emptyCols = 4 + showPowers(settings) + showNegs(settings) + showPPerN(settings, rptConfig) +
+        showGPerN(settings, rptConfig) + 3*showBonus(settings) + 3*showBb(settings) + packetsExist;
       return forfeitRow(opponent, game.round, 'L', roundStyle, emptyCols);
     }
     if(+game.score2 > +game.score1) { result = 'W'; }
@@ -939,6 +1142,7 @@ function teamDetailGameRow(game, whichTeam, packetsExist, packets, settings, pha
   var tens = teamTens(game, whichTeam);
   var negs = teamNegs(game, whichTeam);
   var ppth = (score - otPoints(game, whichTeam, settings)) / (game.tuhtot - game.ottu);
+  var pp20 = 20*ppth;
   var pPerN = negs == 0 ? 'inf' : powers / negs;
   var gPerN = negs == 0 ? 'inf' : (powers + tens) / negs;
   var bHeard = bonusesHeard(game, whichTeam);
@@ -950,32 +1154,37 @@ function teamDetailGameRow(game, whichTeam, packetsExist, packets, settings, pha
 
   var linkId = scoreboardLinkID(game);
   var html = '<tr>' + '\n';
-  html += tdTag(game.round, 'center', false, roundStyle);
+  html += tdTag(game.round, 'center', false, null, roundStyle);
   html += tdTag(opponent, 'left');
   html += tdTag('<a HREF=' + fileStart + 'games.html#' + linkId + '>' + result + '</a>', 'left');
   html += tdTag(score, 'right');
   html += tdTag(opponentScore, 'right');
-  if(usePowers(settings)) {
+  if(showPowers(settings)) {
     html += tdTag(powers, 'right');
   }
   html += tdTag(tens, 'right');
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag(negs, 'right');
   }
   html += tdTag(game.tuhtot, 'right');
-  html += tdTag(formatRate(ppth, 2), 'right');
-  if(usePPerN(settings)) {
+  if(showPptuh(rptConfig)) {
+    html += tdTag(formatRate(ppth, 2), 'right');
+  }
+  if(showPp20(rptConfig)) {
+    html += tdTag(formatRate(pp20, 1), 'right');
+  }
+  if(showPPerN(settings, rptConfig)) {
     html += tdTag(formatRate(pPerN, 2), 'right');
   }
-  if(useGPerN(settings)) {
+  if(showGPerN(settings, rptConfig)) {
     html += tdTag(formatRate(gPerN, 2), 'right');
   }
-  if(useBonus(settings)) {
+  if(showBonus(settings)) {
     html += tdTag(bHeard, 'right');
     html += tdTag(bPts, 'right');
     html += tdTag(formatRate(ppb, 2), 'right');
   }
-  if(useBb(settings)) {
+  if(showBb(settings)) {
     html += tdTag(bbHrdDisplay(bbHrd), 'right');
     html += tdTag(bbPts, 'right');
     html += tdTag(formatRate(ppbb, 2), 'right');
@@ -991,34 +1200,39 @@ function teamDetailGameRow(game, whichTeam, packetsExist, packets, settings, pha
 /*---------------------------------------------------------
 The totals row of a games table on the team detail page.
 ---------------------------------------------------------*/
-function teamDetailTeamSummaryRow(teamSummary, packetsExist, settings) {
-  var html = '<tfoot>' + '\n' + '<tr>' + '\n';
-  html += tdTag('', null, false, 'border-top:1px solid white');
+function teamDetailTeamSummaryRow(teamSummary, packetsExist, settings, rptConfig) {
+  var html = '<tr class="pseudo-tfoot">' + '\n';
+  html += tdTag('', null, false, null, 'border-top:1px solid white');
   html += tdTag('Total', 'left', true);
   html += tdTag('');
   html += tdTag(teamSummary.points, 'right', true);
   html += tdTag(teamSummary.ptsAgainst, 'right', true);
-  if(usePowers(settings)) {
+  if(showPowers(settings)) {
     html += tdTag(teamSummary.powers, 'right', true);
   }
   html += tdTag(teamSummary.tens, 'right', true);
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag(teamSummary.negs, 'right', true);
   }
   html += tdTag(teamSummary.tuh, 'right', true);
-  html += tdTag(teamSummary.ppth, 'right', true);
-  if(usePPerN(settings)) {
+  if(showPptuh(rptConfig)) {
+    html += tdTag(teamSummary.ppth, 'right', true);
+  }
+  if(showPp20(rptConfig)) {
+    html += tdTag(teamSummary.pp20, 'right', true);
+  }
+  if(showPPerN(settings, rptConfig)) {
     html += tdTag(teamSummary.pPerN, 'right', true);
   }
-  if(useGPerN(settings)) {
+  if(showGPerN(settings, rptConfig)) {
     html += tdTag(teamSummary.gPerN, 'right', true);
   }
-  if(useBonus(settings)) {
+  if(showBonus(settings)) {
     html += tdTag(teamSummary.bHeard, 'right', true);
     html += tdTag(teamSummary.bPts, 'right', true);
     html += tdTag(teamSummary.ppb, 'right', true);
   }
-  if(useBb(settings)) {
+  if(showBb(settings)) {
     html += tdTag(bbHrdDisplay(teamSummary.bbHeard), 'right', true);
     html += tdTag(teamSummary.bbPts, 'right', true);
     html += tdTag(teamSummary.ppbb, 'right', true);
@@ -1026,7 +1240,7 @@ function teamDetailTeamSummaryRow(teamSummary, packetsExist, settings) {
   if(packetsExist) {
     html += tdTag('');
   }
-  html += '</tr>' + '\n' + '</tfoot>' + '\n';
+  html += '</tr>' + '\n';
 
   return html;
 }
@@ -1035,64 +1249,99 @@ function teamDetailTeamSummaryRow(teamSummary, packetsExist, settings) {
 Header row for the table of a teams's players on the team
 detail page.
 ---------------------------------------------------------*/
-function teamDetailPlayerTableHeader(settings) {
+function teamDetailPlayerTableHeader(settings, rptConfig) {
   var html = '<tr>' + '\n' +
     tdTag('Player', 'left', true);
-  if(showYear(settings)) {
+  if(showPlayerYear(rptConfig)) {
     html += tdTag('Year', 'left', true);
   }
+  if(showPlayerUG(rptConfig)) {
+    html += tdTag('UG', 'left', true, TOOLTIPS.playerUG);
+  }
+  if(showPlayerD2(rptConfig)) {
+    html += tdTag('D2', 'left', true, TOOLTIPS.playerD2);
+  }
+  if(showPlayerCombined(rptConfig)) {
+    html += tdTag('', 'left', true);
+  }
   html += tdTag('Team', 'left', true) +
-    tdTag('GP', 'right', true);
-  if(usePowers(settings)) {
+    tdTag('GP', 'right', true, TOOLTIPS.gamesPlayed);
+  if(showPowers(settings)) {
     html += tdTag(powerValue(settings), 'right', true);
   }
   html += tdTag('10', 'right', true);
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag('-5', 'right', true);
   }
-  html += tdTag('TUH', 'right', true);
-  html += tdTag('PPTUH', 'right', true);
-  if(usePPerN(settings)) {
-    html += tdTag('Pwr/N', 'right', true);
+  html += tdTag('TUH', 'right', true, TOOLTIPS.tuh);
+  if(showPptuh(rptConfig)) {
+    html += tdTag('PPTUH', 'right', true, TOOLTIPS.pptuh);
   }
-  if(useGPerN(settings)) {
-    html += tdTag('G/N', 'right', true);
+  if(showPPerN(settings, rptConfig)) {
+    html += tdTag('Pwr/N', 'right', true, TOOLTIPS.pPerN);
+  }
+  if(showGPerN(settings, rptConfig)) {
+    html += tdTag('G/N', 'right', true, TOOLTIPS.gPerN);
   }
   html += tdTag('Pts', 'right', true);
-  html += tdTag('PPG', 'right', true);
+  if(showPpg(rptConfig)) {
+    html += tdTag('PPG', 'right', true, TOOLTIPS.ppg);
+  }
+  else {
+    html += tdTag('PP20', 'right', true, TOOLTIPS.pp20);
+  }
   return html + '</tr>' + '\n';
 }
 
 /*---------------------------------------------------------
 Row for a single player on the team detail page.
 ---------------------------------------------------------*/
-function teamDetailPlayerRow(player, fileStart, settings) {
+function teamDetailPlayerRow(player, fileStart, settings, rptConfig) {
   var linkId = player.teamName.replace(/\W/g, '') + '-' +
     player.playerName.replace(/\W/g, '');
   var html = '<tr>' + '\n';
   html += tdTag('<a HREF=' + fileStart + 'playerdetail.html#' + linkId + '>' + player.playerName + '</a>', 'left');
-  if(showYear(settings)) {
+  if(showPlayerYear(rptConfig)) {
     html += tdTag(player.year, 'left');
+  }
+  if(showPlayerUG(rptConfig)) {
+    html += tdTag(player.undergrad ? 'D2' : '', 'left');
+  }
+  if(showPlayerD2(rptConfig)) {
+    html += tdTag(player.div2 ? 'D2' : '', 'left');
+  }
+  if(showPlayerCombined(rptConfig)) {
+    var plComb = '';
+    if(player.div2) { plComb = 'D2'; }
+    else if(player.undergrad) { plComb = 'UG'; }
+    html += tdTag(plComb, 'left');
   }
   html += tdTag(player.teamName, 'left');
   html += tdTag(player.gamesPlayed, 'right');
-  if(usePowers(settings)) {
+  if(showPowers(settings)) {
     html += tdTag(player.powers, 'right');
   }
   html += tdTag(player.tens, 'right');
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag(player.negs, 'right');
   }
   html += tdTag(player.tuh, 'right');
-  html += tdTag(player.pptu, 'right');
-  if(usePPerN(settings)) {
+  if(showPptuh(rptConfig)) {
+    html += tdTag(player.pptu, 'right');
+  }
+  if(showPPerN(settings, rptConfig)) {
     html += tdTag(player.pPerN, 'right');
   }
-  if(useGPerN(settings)) {
+  if(showGPerN(settings, rptConfig)) {
     html += tdTag(player.gPerN, 'right');
   }
   html += tdTag(player.points, 'right');
-  html += tdTag(player.ppg, 'right');
+  if(showPpg(rptConfig)) {
+    html += tdTag(player.ppg, 'right');
+  }
+  else {
+    html += tdTag(player.pp20, 'right');
+  }
   html += '</tr>' + '\n';
 
   return html;
@@ -1101,28 +1350,33 @@ function teamDetailPlayerRow(player, fileStart, settings) {
 /*---------------------------------------------------------
 Header row for a table on the player detail page.
 ---------------------------------------------------------*/
-function playerDetailTableHeader(settings) {
+function playerDetailTableHeader(settings, rptConfig) {
   var html = '<tr>' + '\n' +
-    tdTag('Rd.', 'center', true) +
+    tdTag('Rd.', 'center', true, TOOLTIPS.round) +
     tdTag('Opponent', 'left', true) +
     tdTag('Result', 'left', true) +
-    tdTag('GP', 'right', true);
-  if(usePowers(settings)) {
+    tdTag('GP', 'right', true, TOOLTIPS.gamesPlayed);
+  if(showPowers(settings)) {
     html += tdTag(powerValue(settings), 'right', true);
   }
   html += tdTag('10', 'right', true);
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag('-5', 'right', true);
   }
-  html += tdTag('TUH', 'right', true);
-  html += tdTag('PPTUH', 'right', true);
-  if(usePPerN(settings)) {
-    html += tdTag('Pwr/N', 'right', true);
+  html += tdTag('TUH', 'right', true, TOOLTIPS.tuh);
+  if(showPptuh(rptConfig)) {
+    html += tdTag('PPTUH', 'right', true, TOOLTIPS.pptuh);
   }
-  if(useGPerN(settings)) {
-    html += tdTag('G/N', 'right', true);
+  if(showPPerN(settings, rptConfig)) {
+    html += tdTag('Pwr/N', 'right', true, TOOLTIPS.pPerN);
   }
-  html += tdTag('Pts', 'right', true) + '</tr>' + '\n';
+  if(showGPerN(settings, rptConfig)) {
+    html += tdTag('G/N', 'right', true, TOOLTIPS.gPerN);
+  }
+  html += tdTag('Pts', 'right', true);
+  if(showPp20(rptConfig)) {
+    html += tdTag('PP20', 'right', true, TOOLTIPS.pp20)
+  }
   return html;
 }
 
@@ -1153,7 +1407,7 @@ function playerDetailGameLink(game, whichTeam, fileStart) {
 /*---------------------------------------------------------
 Row for one game for one player on the player detail page.
 ---------------------------------------------------------*/
-function playerDetailGameRow(player, tuhtot, opponent, round, link, settings, gamePhases, phaseColors, formatRdCol) {
+function playerDetailGameRow(player, tuhtot, opponent, round, link, settings, gamePhases, phaseColors, formatRdCol, rptConfig) {
   var [tuh, powers, tens, negs] = playerSlashLine(player);
   if(tuh <= 0) {
     return '';
@@ -1161,32 +1415,38 @@ function playerDetailGameRow(player, tuhtot, opponent, round, link, settings, ga
   var gp = tuh / tuhtot;
   var points = powerValue(settings)*powers + 10*tens - 5*negs;
   var pptu = points / tuh;
+  var pp20 = 20*pptu;
   var pPerN = negs == 0 ? 'inf' : powers / negs;
   var gPerN = negs == 0 ? 'inf' : (powers + tens) / negs;
 
   var roundStyle = formatRdCol ? getRoundStyle(gamePhases, phaseColors) : '';
 
   var html = '<tr>' + '\n';
-  html += tdTag(round, 'center', false, roundStyle);
+  html += tdTag(round, 'center', false, null, roundStyle);
   html += tdTag(opponent, 'left');
   html += tdTag(link, 'left');
   html += tdTag(formatRate(gp, 1), 'right');
-  if(usePowers(settings)) {
+  if(showPowers(settings)) {
     html += tdTag(powers, 'right');
   }
   html += tdTag(tens, 'right');
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag(negs, 'right');
   }
   html += tdTag(tuh, 'right');
-  html += tdTag(formatRate(pptu, 2), 'right');
-  if(usePPerN(settings)) {
+  if(showPptuh(rptConfig)) {
+    html += tdTag(formatRate(pptu, 2), 'right');
+  }
+  if(showPPerN(settings, rptConfig)) {
     html += tdTag(formatRate(pPerN, 2), 'right');
   }
-  if(useGPerN(settings)) {
+  if(showGPerN(settings, rptConfig)) {
     html += tdTag(formatRate(gPerN, 2), 'right');
   }
   html += tdTag(points, 'right');
+  if(showPp20(rptConfig)) {
+    html += tdTag(formatRate(pp20, 1), 'right');
+  }
   html += '</tr>' + '\n';
   return html;
 }
@@ -1195,29 +1455,34 @@ function playerDetailGameRow(player, tuhtot, opponent, round, link, settings, ga
 Total row for a table on the player detail page. Reuse
 results of compileIndividuals
 ---------------------------------------------------------*/
-function playerDetailTotalRow(player, settings) {
-  var html = '<tfoot>' + '\n' + '<tr>' + '\n';
-  html += tdTag('', null, false, 'border-top:1px solid white');
+function playerDetailTotalRow(player, settings, rptConfig) {
+  var html = '<tr class="pseudo-tfoot">' + '\n';
+  html += tdTag('', null, false, null, 'border-top:1px solid white');
   html += tdTag('Total', 'left', true);
   html += tdTag('');
   html += tdTag(player.gamesPlayed, 'right', true);
-  if(usePowers(settings)) {
+  if(showPowers(settings)) {
     html += tdTag(player.powers, 'right', true);
   }
   html += tdTag(player.tens, 'right', true);
-  if(useNegs(settings)) {
+  if(showNegs(settings)) {
     html += tdTag(player.negs, 'right', true);
   }
   html += tdTag(player.tuh, 'right', true);
-  html += tdTag(player.pptu, 'right', true);
-  if(usePPerN(settings)) {
+  if(showPptuh(rptConfig)) {
+    html += tdTag(player.pptu, 'right', true);
+  }
+  if(showPPerN(settings, rptConfig)) {
     html += tdTag(player.pPerN, 'right', true);
   }
-  if(useGPerN(settings)) {
+  if(showGPerN(settings, rptConfig)) {
     html += tdTag(player.gPerN, 'right', true);
   }
   html += tdTag(player.points, 'right', true);
-  html += '</tr>' + '\n' + '</tfoot>' + '\n';
+  if(showPp20(rptConfig)) {
+    html += tdTag(player.pp20, 'right', true);
+  }
+  html += '</tr>' + '\n';
   return html;
 }
 
@@ -1264,6 +1529,7 @@ function compileRoundSummaries(games, phase, settings) {
   for(var i in summaries) {
     var smry = summaries[i];
     smry.ppg = smry.totalPoints / (2 * smry.numberOfGames);
+    smry.pp20 = 20 * smry.totalPoints / (2 * smry.tuh);
     smry.tuPtsPTu = smry.tuPts / smry.tuh;
     smry.ppb = smry.bHeard == 0 ? 0 : smry.bPts / smry.bHeard;
     smry.ppbb = smry.bbPts / bbHrdToFloat(smry.bbHeard);
@@ -1274,21 +1540,26 @@ function compileRoundSummaries(games, phase, settings) {
 /*---------------------------------------------------------
 Header row for the table in the round report.
 ---------------------------------------------------------*/
-function roundReportTableHeader(packetsExist, settings) {
+function roundReportTableHeader(packetsExist, settings, rptConfig) {
   var html = '<tr>' + '\n' +
     tdTag('Round', 'left', true);
   if(packetsExist) {
     html += tdTag('Packet', 'left', true);
   }
   html += tdTag('No. Games', 'right', true);
-  html += tdTag('PPG/Team', 'right', true);
-  if(useBonus(settings)) {
-    html += tdTag('TUPts/TUH', 'right', true);
-    html += tdTag('PPB', 'right', true);
+  if(showPpg(rptConfig)) {
+    html += tdTag('PPG/Team', 'right', true, TOOLTIPS.ppgPerTeam);
   }
-  else { html += tdTag('Pts/TUH', 'right', true); }
-  if(useBb(settings)) {
-    html += tdTag('PPBB', 'right', true);
+  else { //show pp20
+    html += tdTag('PP20/Team', 'right', true, TOOLTIPS.pp20PerTeam);
+  }
+  if(showBonus(settings)) {
+    html += tdTag('TUPts/TUH', 'right', true, TOOLTIPS.tuPtsPTu);
+    html += tdTag('PPB', 'right', true, TOOLTIPS.ppb);
+  }
+  else { html += tdTag('Pts/TUH', 'right', true, TOOLTIPS.tuPtsPTu); }
+  if(showBb(settings)) {
+    html += tdTag('PPBB', 'right', true, TOOLTIPS.ppbb);
   }
   html += '</tr>' + '\n';
   return html;
@@ -1297,7 +1568,7 @@ function roundReportTableHeader(packetsExist, settings) {
 /*---------------------------------------------------------
 A row of data in the round report.
 ---------------------------------------------------------*/
-function roundReportRow(smry, roundNo, packetsExist, packets, settings) {
+function roundReportRow(smry, roundNo, packetsExist, packets, settings, rptConfig) {
   var html = '<tr>' + '\n' +
     tdTag(roundNo, 'left');
   if(packetsExist) {
@@ -1305,12 +1576,17 @@ function roundReportRow(smry, roundNo, packetsExist, packets, settings) {
     html += tdTag(packetName, 'left');
   }
   html += tdTag(smry.numberOfGames, 'right');
-  html += tdTag(smry.ppg.toFixed(1), 'right');
+  if(showPpg(rptConfig)) {
+    html += tdTag(smry.ppg.toFixed(1), 'right');
+  }
+  else { //pp20
+    html += tdTag(smry.pp20.toFixed(1), 'right');
+  }
   html += tdTag(smry.tuPtsPTu.toFixed(2), 'right');
-  if(useBonus(settings)) {
+  if(showBonus(settings)) {
     html += tdTag(smry.ppb.toFixed(2), 'right');
   }
-  if(useBb(settings)) {
+  if(showBb(settings)) {
     html += tdTag(smry.ppbb.toFixed(2), 'right');
   }
   html += '</tr>' + '\n';
@@ -1358,36 +1634,48 @@ this in the body.
 function tableStyle() {
   return '<style>\n' +
     'td {\n  padding: 5px;\n}\n' +
-    'tfoot {\n  border-top: 1px solid #909090;\n}\n' +
+    'tfoot {\n  border-top: 1px solid #909090;\n}\n' + // unused currently
     'tr:nth-child(even) {\n  background-color: #f2f2f2;\n}\n' +
+    // this one is needed because HSQB doesn't allow uploading files with tfoot tags >:(
+    '.pseudo-tfoot {\n border-top: 1px solid #909090;\n background-color: #ffffff !important;\n}\n' +
     'table {\n  border-spacing: 0;\n  border-collapse: collapse;\n}\n' +
-    '</style>'
+    '[title]:not([title=""]) {\n cursor: help;\n text-decoration: underline;\n text-decoration-style: dotted;\n}\n' +
+    '.phaseLegend:hover {\n color: lightgray;\n opacity: 0.3;\n}\n' +
+    '</style>\n';
 }
 
 /*---------------------------------------------------------
 Generate the team standings page.
 ---------------------------------------------------------*/
-function getStandingsHtml(teams, games, fileStart, phase, groupingPhase, divsInPhase, settings) {
-  var standings = compileStandings(teams, games, phase, groupingPhase, settings);
+function getStandingsHtml(teams, games, fileStart, phase, groupingPhase, divsInPhase, settings, rptConfig) {
+  var standings = compileStandings(teams, games, phase, groupingPhase, settings, rptConfig);
   var tiesExist = anyTiesExist(standings);
   var html = getStatReportTop('TeamStandings', fileStart, 'Team Standings') +
     '<h1> Team Standings</h1>' + '\n';
   html += tableStyle();
   if(divsInPhase != undefined && divsInPhase.length > 0) {
+    var teamsInPriorDivisions = 0;
     for(var i in divsInPhase) {
       html += '<h2>' + divsInPhase[i] + '</h2>' + '\n';
-      html += '<table width=100%>' + '\n' + standingsHeader(settings, tiesExist);
+      html += '<table width=100%>' + '\n' + standingsHeader(settings, tiesExist, rptConfig, groupingPhase);
       var teamsInDiv = _.filter(standings, (t) => { return t.division == divsInPhase[i] });
+      var curRank = 0, prevPhaseRecord = null, curTeam;
       for(var j in teamsInDiv) {
-        html += standingsRow(teamsInDiv[j], parseFloat(j)+1, fileStart, settings, tiesExist);
+        curTeam = teamsInDiv[j];
+        if(!showPhaseRecord(rptConfig) || (prevPhaseRecord == null || curTeam.phaseWinPct != prevPhaseRecord)) {
+          curRank = teamsInPriorDivisions + (+j) + 1;
+        }
+        html += standingsRow(curTeam, curRank, fileStart, settings, tiesExist, rptConfig);
+        prevPhaseRecord = curTeam.phaseWinPct;
       }
+      if(showPhaseRecord(rptConfig)) { teamsInPriorDivisions += +j+1; }
       html += '</table>' + '\n';
     }
   }
   else { //not using divisions
-    html += '<table width=100%>' + '\n' + standingsHeader(settings, tiesExist);
+    html += '<table width=100%>' + '\n' + standingsHeader(settings, tiesExist, rptConfig);
     for(var i in standings) {
-      html += standingsRow(standings[i], parseFloat(i)+1, fileStart, settings, tiesExist);
+      html += standingsRow(standings[i], parseFloat(i)+1, fileStart, settings, tiesExist, rptConfig);
     }
     html += '\n' + '</table>' + '\n';
   }
@@ -1397,15 +1685,15 @@ function getStandingsHtml(teams, games, fileStart, phase, groupingPhase, divsInP
 /*---------------------------------------------------------
 Generate the individual standings page.
 ---------------------------------------------------------*/
-function getIndividualsHtml(teams, games, fileStart, phase, groupingPhase, usingDivisions, settings) {
+function getIndividualsHtml(teams, games, fileStart, phase, groupingPhase, usingDivisions, settings, rptConfig) {
   var individuals = compileIndividuals(teams, games, phase, groupingPhase, settings);
   var html = getStatReportTop('IndividualStandings', fileStart, 'Individual Standings') +
     '<h1> Individual Statistics</h1>' + '\n';
   html += tableStyle();
-  html += '<table width=100%>' + individualsHeader(usingDivisions, settings);
+  html += '<table width=100%>' + individualsHeader(usingDivisions, settings, rptConfig);
   for(var i in individuals) {
     if(individuals[i].gamesPlayed > 0) {
-      html += individualsRow(individuals[i], parseFloat(i)+1, fileStart, usingDivisions, settings);
+      html += individualsRow(individuals[i], parseFloat(i)+1, fileStart, usingDivisions, settings, rptConfig);
     }
   }
   return html + '\n' + '</table>' + '\n' +  getStatReportBottom();
@@ -1434,10 +1722,10 @@ function getScoreboardHtml(teams, games, fileStart, phase, settings, packets, ph
 /*---------------------------------------------------------
 Generate the team detail page.
 ---------------------------------------------------------*/
-function getTeamDetailHtml(teams, games, fileStart, phase, packets, settings, phaseColors) {
+function getTeamDetailHtml(teams, games, fileStart, phase, packets, settings, phaseColors, rptConfig) {
   teams = _.orderBy(teams, function(item) { return item.teamName.toLowerCase(); }, 'asc');
   games = _.orderBy(games, function(item) { return toNum(item.round); }, 'asc');
-  var standings = compileStandings(teams, games, phase, null, settings);
+  var standings = compileStandings(teams, games, phase, null, settings, rptConfig);
   var individuals = compileIndividuals(teams, games, phase, null, settings);
   var packetsExist = packetNamesExist(packets);
 
@@ -1449,27 +1737,43 @@ function getTeamDetailHtml(teams, games, fileStart, phase, packets, settings, ph
   for(var i in teams) {
     var teamName = teams[i].teamName;
     var linkId = teamName.replace(/\W/g, '');
-    html += '<h2 id=' + linkId + '>' + teamName + '</h2>' + '\n';
+    html += '<h2 style="display:inline-block" id=' + linkId + '>' + teamName + '</h2>' + '\n';
+    //display UG, D2 status
+    var statusDisp = '';
+    if((showTeamUG(rptConfig) || showTeamCombined(rptConfig)) && teams[i].teamUGStatus) {
+      statusDisp += '<span style=" font-style: italic; color: gray">' + 'UG';
+    }
+    if((showTeamD2(rptConfig) || showTeamCombined(rptConfig)) && teams[i].teamD2Status) {
+      if(statusDisp.length == 0) {
+        statusDisp += '<span style=" font-style: italic; color: gray">' + 'D2';
+      }
+      else { statusDisp += ', D2'; }
+    }
+    if(statusDisp.length > 0) {
+      statusDisp += '</span>' + '\n';
+    }
+    html += statusDisp;
+
     html += '<table width=100%>' + '\n';
-    html += teamDetailGameTableHeader(packetsExist, settings) + '\n';
+    html += teamDetailGameTableHeader(packetsExist, settings, rptConfig) + '\n';
     for(var j in games) {
       let gameInPhase = phase == 'all' || games[j].phases.includes(phase);
       if(gameInPhase && games[j].team1 == teamName) {
-        html += teamDetailGameRow(games[j], 1, packetsExist, packets, settings, phaseColors, phase=='all', fileStart);
+        html += teamDetailGameRow(games[j], 1, packetsExist, packets, settings, phaseColors, phase=='all', fileStart, rptConfig);
       }
       else if(gameInPhase && games[j].team2 == teamName) {
-        html += teamDetailGameRow(games[j], 2, packetsExist, packets, settings, phaseColors, phase=='all', fileStart);
+        html += teamDetailGameRow(games[j], 2, packetsExist, packets, settings, phaseColors, phase=='all', fileStart, rptConfig);
       }
     }
     var teamSummary = _.find(standings, (o) => { return o.teamName == teamName; });
-    html += teamDetailTeamSummaryRow(teamSummary, packetsExist, settings);
+    html += teamDetailTeamSummaryRow(teamSummary, packetsExist, settings, rptConfig);
     html += '</table>' + '<br>' + '\n';
     html += '<table width=100%>' + '\n';
-    html += teamDetailPlayerTableHeader(settings) + '\n';
+    html += teamDetailPlayerTableHeader(settings, rptConfig) + '\n';
     for(var i in individuals) {
       var player = individuals[i]
       if(player.teamName == teamName && player.gamesPlayed > 0) {
-        html += teamDetailPlayerRow(individuals[i], fileStart, settings);
+        html += teamDetailPlayerRow(individuals[i], fileStart, settings, rptConfig);
       }
     }
     html += '</table>' + '<br>' + '\n';
@@ -1480,7 +1784,7 @@ function getTeamDetailHtml(teams, games, fileStart, phase, packets, settings, ph
 /*---------------------------------------------------------
 Generate the player detail page.
 ---------------------------------------------------------*/
-function getPlayerDetailHtml(teams, games, fileStart, phase, settings, phaseColors) {
+function getPlayerDetailHtml(teams, games, fileStart, phase, settings, phaseColors, rptConfig) {
   teams = _.orderBy(teams, function(item) { return item.teamName.toLowerCase(); }, 'asc');
   games = _.orderBy(games, function(item) { return parseFloat(item.round); }, 'asc');
   var playerTotals = compileIndividuals(teams, games, phase, null, settings);
@@ -1501,13 +1805,34 @@ function getPlayerDetailHtml(teams, games, fileStart, phase, settings, phaseColo
       indvTot.playerName.replace(/\W/g, '');
     html += '<h2 style="display:inline-block" id=' + linkId + '>' +
       indvTot.playerName + ', ' + indvTot.teamName + '</h2>' + '\n';
-    if(showYear(settings)) {
+    //year, UG, and D2 status
+    var demogDisp = '';
+    if(showPlayerYear(rptConfig)) {
       var yearDisp = indvTot.year.split('.')[0]; //truncate decimals, if someone is being weird
       if(+yearDisp >= 4 && +yearDisp <= 12) { yearDisp += 'th grade'; }
-      html += '<span style="font-style: italic; color: gray">' + yearDisp + '</span>' + '\n';
+      if(yearDisp.length > 0) {
+        demogDisp = '<span style="font-style: italic; color: gray">' + yearDisp;
+      }
     }
+    if((showPlayerUG(rptConfig) || showPlayerCombined(rptConfig)) && indvTot.undergrad) {
+      if(demogDisp.length == 0) {
+        demogDisp = '<span style="font-style: italic; color: gray">' + 'UG';
+      }
+      else{ demogDisp += ', UG'; }
+    }
+    if((showPlayerD2(rptConfig) || showPlayerCombined(rptConfig)) && indvTot.div2) {
+      if(demogDisp.length == 0) {
+        demogDisp = '<span style="font-style: italic; color: gray">' + 'D2';
+      }
+      else{ demogDisp += ', D2'; }
+    }
+    if(demogDisp.length >= 0) {
+      demogDisp += '</span>' + '\n';
+    }
+    html += demogDisp;
+
     html += '<table width=100%>' + '\n';
-    html += playerDetailTableHeader(settings);
+    html += playerDetailTableHeader(settings, rptConfig);
     for(var j in games) {
       var game = games[j];
       let gameInPhase = phase == 'all' || game.phases.includes(phase);
@@ -1516,7 +1841,7 @@ function getPlayerDetailHtml(teams, games, fileStart, phase, settings, phaseColo
           if(p == indvTot.playerName) {
             var link = playerDetailGameLink(game, 1, fileStart);
             html += playerDetailGameRow(game.players1[p], game.tuhtot, game.team2,
-              game.round, link, settings, game.phases, phaseColors, phase == 'all');
+              game.round, link, settings, game.phases, phaseColors, phase == 'all', rptConfig);
           }
         }
       }
@@ -1525,12 +1850,12 @@ function getPlayerDetailHtml(teams, games, fileStart, phase, settings, phaseColo
         for(var p in game.players2) {
           if(p == indvTot.playerName) {
             html += playerDetailGameRow(game.players2[p], game.tuhtot, game.team1,
-              game.round, link, settings, game.phases, phaseColors, phase == 'all');
+              game.round, link, settings, game.phases, phaseColors, phase == 'all', rptConfig);
           }
         }
       }
     }
-    html += playerDetailTotalRow(indvTot, settings);
+    html += playerDetailTotalRow(indvTot, settings, rptConfig);
     html += '</table>' + '<br>' + '\n';
   }//loop over all players in the tournament
 
@@ -1540,7 +1865,7 @@ function getPlayerDetailHtml(teams, games, fileStart, phase, settings, phaseColo
 /*---------------------------------------------------------
 Generate the team round report page.
 ---------------------------------------------------------*/
-function getRoundReportHtml(teams, games, fileStart, phase, packets, settings) {
+function getRoundReportHtml(teams, games, fileStart, phase, packets, settings, rptConfig) {
   games = _.orderBy(games, function(item) { return parseFloat(item.round); }, 'asc');
   var roundSummaries = compileRoundSummaries(games, phase, settings);
   var packetsExist = packetNamesExist(packets);
@@ -1548,9 +1873,9 @@ function getRoundReportHtml(teams, games, fileStart, phase, packets, settings) {
     '<h1> Round Report</h1>' + '\n';
   html += tableStyle();
   html += '<table width=100%>' + '\n';
-  html += roundReportTableHeader(packetsExist, settings);
+  html += roundReportTableHeader(packetsExist, settings, rptConfig);
   for(var i in roundSummaries) {
-    html += roundReportRow(roundSummaries[i], i, packetsExist, packets, settings);
+    html += roundReportRow(roundSummaries[i], i, packetsExist, packets, settings, rptConfig);
   }
   html += '</table>' + '\n';
   return html + getStatReportBottom();

@@ -23,36 +23,56 @@ var GameListEntry = require('./GameListEntry');
 var HeaderNav = require('./HeaderNav');
 var AddTeamModal = require('./AddTeamModal');
 var AddGameModal = require('./AddGameModal');
+var RptConfigModal = require('./RptConfigModal');
 var DivAssignModal = require('./DivAssignModal');
 var PhaseAssignModal = require('./PhaseAssignModal');
 var SettingsForm = require('./SettingsForm');
 var TeamList = require('./TeamList');
 var GameList = require('./GameList');
 var StatSidebar = require('./StatSidebar');
+var SidebarToggleButton = require('./SidebarToggleButton');
 
 const MAX_PLAYERS_PER_TEAM = 30;
-const METADATA = {version:'2.1.0'};
+const METADATA = {version:'2.2.2'};
 const DEFAULT_SETTINGS = {
   powers: '15pts',
   negs: 'yes',
   bonuses: 'noBb',
   playersPerTeam: '4',
   defaultPhase: 'noPhase', // Used to group teams when viewing all games
-  yearDisplay: false // whether to show player's grade/year in the html report
+  rptConfig: 'SQBS Defaults'
 };
-//Materialize accent-1 colors: yellow, light-green, orange, light-blue, red, purple, teal, deep-purple
+//Materialize accent-1 colors: yellow, light-green, orange, light-blue, red, purple, teal, deep-purple, pink, green
 const PHASE_COLORS = ['#ffff8d', '#ccff90', '#ffd180', '#80d8ff',
-  '#ff8a80', '#ea80fc', '#a7ffeb', '#b388ff'];
+  '#ff8a80', '#ea80fc', '#a7ffeb', '#b388ff', '#ff80ab', '#b9fc6a'];
+const EMPTY_CUSTOM_RPT_CONFIG = {
+    defaultRpt: null,
+    rptConfigList: {}
+}
+const ORIG_DEFAULT_RPT_NAME = 'SQBS Defaults';
+const MAX_CUSTOM_RPT_CONFIGS = 25;
+const DEFAULT_FORM_SETTINGS = {
+  year: true,
+  playerUG: true,
+  playerD2: true
+};
 
 
-class MainInterface extends React.Component{
+class MainInterface extends React.Component {
 
   constructor(props) {
     super(props);
+
     var defSettingsCopy = $.extend(true, {}, DEFAULT_SETTINGS);
+    var defFormSettingsCopy = $.extend(true, {}, DEFAULT_FORM_SETTINGS);
+
+    var loadRpts = fs.readFileSync(RELEASED_RPT_CONFIG_FILE, 'utf8');
+    var releasedRptList = JSON.parse(loadRpts).rptConfigList;
+
     this.state = {
       tmWindowVisible: false, // whether the team entry modal is open
       gmWindowVisible: false, // whether the game entry modal is open
+      rptConfigWindowVisible: false, // whether the report configuration modal is open
       divWindowVisible: false, // whether the team division assignment modal is open
       phaseWindowVisible: false, // whether the game phase assignment modal is open
       teamOrder: 'alpha', // sort order. Either 'alpha' or 'division'
@@ -64,6 +84,7 @@ class MainInterface extends React.Component{
       myTeams: [], // the list of teams
       myGames: [], // the list of games
       gameIndex: {}, // the list of rounds, and how many games exist for that round
+      playerIndex: {}, // the list of teams with their players, and how many games each player has played
       selectedTeams: [], // teams with checkbox checked on the teams pane
       selectedGames: [], // games with checkbox checked on the games pane
       checkTeamToggle: false, // used in the key of TeamListEntry components in order to
@@ -71,6 +92,7 @@ class MainInterface extends React.Component{
       checkGameToggle: false, // see checkTeamToggle
       settingsLoadToggle: false, // used to force the whole settings pane to redraw when
                                  // when divisions or phases are changed
+      navbarLoadToggle: false, //used to force the navbar to redraw
       activePane: 'settingsPane',  // settings, teams, or games
       viewingPhase: 'all', // 'all' or the name of a user-defined phase
       forceResetForms: false, // used to force an additional render in the team and game
@@ -81,7 +103,14 @@ class MainInterface extends React.Component{
       gmAddOrEdit: 'add', // either 'add' or 'edit'
       editingSettings: false, // Whether the "settings" section of the settings pane is open for editing
       gameToBeDeleted: null, // which game the user is attempting to delete
-      yearDataExists: false // do any players have grades/years that could be displayed?
+      releasedRptList: releasedRptList, // list of uneditable report configurations
+      customRptList: {}, // list of user-created report configurations
+      customRptFile: null, // file path to score user configuration
+      defaultRpt: ORIG_DEFAULT_RPT_NAME, // which report configuration is default for new tournaments
+      activeRpt: ORIG_DEFAULT_RPT_NAME, // which report configuration is currently being used
+      modalsInitialized: false, // we only need to initialize Materialize modals on the first render
+      formSettings: defFormSettingsCopy, // which optional entry fields to turn on or off
+      sidebarOpen: true // whether the sidebar is visible
     };
     this.openTeamAddWindow = this.openTeamAddWindow.bind(this);
     this.openGameAddWindow = this.openGameAddWindow.bind(this);
@@ -98,7 +127,7 @@ class MainInterface extends React.Component{
     this.onLoadTeamInModal = this.onLoadTeamInModal.bind(this);
     this.onLoadGameInModal = this.onLoadGameInModal.bind(this);
     this.validateTeamName = this.validateTeamName.bind(this);
-    this.hasTeamPlayedInRound = this.hasTeamPlayedInRound.bind(this);
+    this.haveTeamsPlayedInRound = this.haveTeamsPlayedInRound.bind(this);
     this.onSelectTeam = this.onSelectTeam.bind(this);
     this.onSelectGame = this.onSelectGame.bind(this);
     this.reOrder = this.reOrder.bind(this);
@@ -118,6 +147,12 @@ class MainInterface extends React.Component{
     this.teamHasPlayedGames = this.teamHasPlayedGames.bind(this);
     this.savePackets = this.savePackets.bind(this);
     this.sortTeamsBy = this.sortTeamsBy.bind(this);
+    this.modifyRptConfig = this.modifyRptConfig.bind(this);
+    this.setDefaultRpt = this.setDefaultRpt.bind(this);
+    this.clearDefaultRpt = this.clearDefaultRpt.bind(this);
+    this.rptDeletionPrompt = this.rptDeletionPrompt.bind(this);
+    this.filterByTeam = this.filterByTeam.bind(this);
+    this.toggleSidebar = this.toggleSidebar.bind(this);
   }
 
   /*---------------------------------------------------------
@@ -194,8 +229,27 @@ class MainInterface extends React.Component{
         gameToBeDeleted: null
       });
     });
-    ipc.on('toggleYearDisplay', (event, checked) => {
-      this.toggleYearDisplay(checked);
+    ipc.on('openRptConfig', (event) => {
+      if(!this.anyModalOpen()) { this.openRptConfigModal(); }
+    });
+    ipc.on('rptDeleteConfirmation', (event, rptName) => {
+      this.deleteRpt(rptName);
+    });
+    ipc.on('setActiveRptConfig', (event, rptName) => {
+      this.setState({
+        activeRpt: rptName
+      });
+    });
+    ipc.on('toggleFormField', (event, whichField, status) => {
+      this.toggleFormField(whichField, status);
+    });
+    ipc.on('toggleSidebar', (event, open) => {
+      this.setState({
+        sidebarOpen: open
+      });
+    });
+    ipc.on('loadRptConfigs', (event, env) => {
+      this.loadCustomRptConfigs(env);
     });
   } //componentDidMount
 
@@ -222,26 +276,68 @@ class MainInterface extends React.Component{
     ipc.removeAllListeners('focusSearch');
     ipc.removeAllListeners('confirmDelete');
     ipc.removeAllListeners('cancelDelete');
-    ipc.removeAllListeners('toggleYearDisplay');
+    ipc.removeAllListeners('openRptConfig');
+    ipc.removeAllListeners('rptDeleteConfirmation');
+    ipc.removeAllListeners('setActiveRptConfig');
+    ipc.removeAllListeners('toggleFormField');
+    ipc.removeAllListeners('toggleSidebar');
+    ipc.removeAllListeners('loadRptConfigs');
   } //componentWillUnmount
 
   /*---------------------------------------------------------
-  Unused at the moment
+  Lifecycle method.
   ---------------------------------------------------------*/
   componentDidUpdate() {
+    if(!this.state.modalsInitialized) {
+      this.setState({
+        modalsInitialized: true
+      });
+    }
   }
 
   /*---------------------------------------------------------
-  Change whether to display year info in the html report.
-  Checked: boolean - whether or not to show
+  Load report configurations, after the main process has
+  told us where to look. Called once when the application
+  starts.
   ---------------------------------------------------------*/
-  toggleYearDisplay(checked) {
-    var settings = this.state.settings;
-    settings.yearDisplay = checked;
+  loadCustomRptConfigs(env) {
+    //load report configurations from files. Paths are defined in index.html
+    var loadRpts = fs.readFileSync(RELEASED_RPT_CONFIG_FILE, 'utf8');
+    var releasedRptList = JSON.parse(loadRpts).rptConfigList;
+    var defaultRpt = ORIG_DEFAULT_RPT_NAME;
+
+    var customRptFile = env == 'production' ? CUSTOM_RPT_CONFIG_FILE_PROD : CUSTOM_RPT_CONFIG_FILE_DEV;
+
+    if(fs.existsSync(customRptFile)) {
+      loadRpts = fs.readFileSync(customRptFile, 'utf8');
+      var customRptConfig = JSON.parse(loadRpts);
+      var customRptList = customRptConfig.rptConfigList;
+      if(customRptList[customRptConfig.defaultRpt] != undefined) {
+        defaultRpt = customRptConfig.defaultRpt;
+      }
+    }
+    else {
+      var customRptList = {};
+      fs.writeFile(customRptFile, JSON.stringify(EMPTY_CUSTOM_RPT_CONFIG), 'utf8', function(err) {
+        if (err) { console.log(err); }
+      });
+    }
+    // don't allow >25 custom configs (you'd have to manually mess with the file to have this happen)
+    if(Object.keys(customRptList).length > MAX_CUSTOM_RPT_CONFIGS) {
+      var customRptSlice = Object.keys(customRptList).slice(MAX_CUSTOM_RPT_CONFIGS);
+      for(var i in customRptSlice) { delete customRptList[customRptSlice[i]]; }
+    }
+
+    var defFormSettingsCopy = $.extend(true, {}, DEFAULT_FORM_SETTINGS);
+    ipc.sendSync('rebuildMenus', releasedRptList, customRptList, defaultRpt, defFormSettingsCopy);
+
     this.setState({
-      settings: settings
+      releasedRptList: releasedRptList, // list of uneditable report configurations
+      customRptList: customRptList, // list of user-created report configurations
+      customRptFile: customRptFile, // file path to store use configuration
+      defaultRpt: defaultRpt, // which report configuration is default for new tournaments
+      activeRpt: defaultRpt, // which report configuration is currently being used
     });
-    ipc.sendSync('unsavedData');
   }
 
   /*---------------------------------------------------------
@@ -249,9 +345,12 @@ class MainInterface extends React.Component{
   Filename: the file to write to
   ---------------------------------------------------------*/
   writeJSON(fileName) {
+    var tempSettings = this.state.settings;
+    // whichever report config is active becomes this tournament's config
+    tempSettings.rptConfig = this.state.activeRpt;
     var fileString = JSON.stringify(METADATA) + '\n' +
       JSON.stringify(this.state.packets) + '\n' +
-      JSON.stringify(this.state.settings) + '\n' +
+      JSON.stringify(tempSettings) + '\n' +
       JSON.stringify(this.state.divisions) + '\n' +
       JSON.stringify(this.state.myTeams) + '\n' +
       JSON.stringify(this.state.myGames);
@@ -260,6 +359,9 @@ class MainInterface extends React.Component{
     });
     ipc.sendSync('setWindowTitle',
       fileName.substring(fileName.lastIndexOf('\\')+1, fileName.lastIndexOf('.')));
+    this.setState({
+      settings: tempSettings
+    });
   }
 
   /*---------------------------------------------------------
@@ -299,6 +401,41 @@ class MainInterface extends React.Component{
   }
 
   /*---------------------------------------------------------
+  Update the player index with the games being loaded from a
+  file. set startOver to true to wipe out the current index,
+  false to add to it.
+  ---------------------------------------------------------*/
+  loadPlayerIndex(loadTeams, loadGames, startOver) {
+    var curTeam, tempIndex, idxPiece;
+    if(startOver) {
+      tempIndex = {};
+      for(var i in loadTeams) {
+        tempIndex[loadTeams[i].teamName] = {};
+      }
+    }
+    else {
+      tempIndex = this.state.playerIndex;
+    }
+    for(var i in loadGames) {
+      var curGame = loadGames[i];
+      var team1 = curGame.team1, team2 = curGame.team2;
+      if(tempIndex[team1] == undefined) { tempIndex[team1] = {}; }
+      for(var p in curGame.players1) {
+        if(tempIndex[team1][p] == undefined) { tempIndex[team1][p] = 0; }
+        if(curGame.players1[p].tuh > 0) { tempIndex[team1][p]++; }
+      }
+      if(tempIndex[team2] == undefined) { tempIndex[team2] = {}; }
+      for(var p in curGame.players2) {
+        if(tempIndex[team2][p] == undefined) { tempIndex[team2][p] = 0; }
+        if(curGame.players2[p].tuh > 0) { tempIndex[team2][p]++; }
+      }
+    }
+    this.setState({
+      playerIndex: tempIndex
+    });
+  }
+
+  /*---------------------------------------------------------
   Load the tournament data from fileName into the appropriate
   state variables. The user may now begin editing this
   tournament.
@@ -312,6 +449,7 @@ class MainInterface extends React.Component{
     loadDivisions = JSON.parse(loadDivisions);
     loadTeams = JSON.parse(loadTeams);
     loadGames = JSON.parse(loadGames);
+    var assocRpt = loadSettings.rptConfig;
 
     //if coming from 2.0.4 or earlier, arbitrarily pick the first phase as default
     if(loadSettings.defaultPhase == undefined) {
@@ -320,16 +458,26 @@ class MainInterface extends React.Component{
         loadSettings.defaultPhase = Object.keys(loadDivisions)[0];
       }
     }
+    //if coming from 2.1.0 or earlier, assign the SQBS default report
+    if(assocRpt == undefined) {
+      assocRpt = ORIG_DEFAULT_RPT_NAME;
+    }
     //convert teams to new data structure
     if(versionLt(loadMetadata.version, '2.1.0')) {
       teamConversion2x1x0(loadTeams);
-      // also define this setting, which didn't exist
-      loadSettings.yearDisplay = false;
+    }
+    if(versionLt(loadMetadata.version, '2.2.0')) {
+      teamConversion2x2x0(loadTeams);
+    }
+    //revert to SQBS defaults if we can't find this file's report configuration
+    if(this.state.releasedRptList[assocRpt] == undefined && this.state.customRptList[assocRpt] == undefined) {
+      assocRpt = ORIG_DEFAULT_RPT_NAME;
     }
 
     ipc.sendSync('setWindowTitle',
       fileName.substring(fileName.lastIndexOf('\\')+1, fileName.lastIndexOf('.')));
-    ipc.sendSync('toggleYearDisplay', loadSettings.yearDisplay); // keep menu item in sync
+    ipc.sendSync('rebuildMenus', this.state.releasedRptList, this.state.customRptList, assocRpt, this.state.formSettings);
+
     this.setState({
       settings: loadSettings,
       packets: loadPackets,
@@ -338,11 +486,13 @@ class MainInterface extends React.Component{
       myGames: loadGames,
       settingsLoadToggle: !this.state.settingsLoadToggle,
       viewingPhase: 'all',
-      activePane: 'settingsPane'
+      activePane: 'settingsPane',
+      activeRpt: assocRpt
     });
     //the value of settingsLoadToggle doesn't matter; it just needs to change
     //in order to make the settings form load
     this.loadGameIndex(loadGames, true);
+    this.loadPlayerIndex(loadTeams, loadGames, true);
   }
 
   /*---------------------------------------------------------
@@ -380,12 +530,14 @@ class MainInterface extends React.Component{
       for(var j=0; j<rosterSize && j<MAX_PLAYERS_PER_TEAM; j++) {
         var nextPlayer = sqbsAry[curLine++].trim();
         if(!lowercaseRoster.includes(nextPlayer.toLowerCase())) {
-          roster[nextPlayer] = {year: ''};
+          roster[nextPlayer] = {year: '', div2: false, undergrad: false};
           lowercaseRoster.push(nextPlayer.toLowerCase());
         }
       }
       myTeams.push({
         teamName: teamName,
+        teamUGStatus: false,
+        teamD2Status: false,
         roster: roster,
         divisions: {}
       });
@@ -433,10 +585,14 @@ class MainInterface extends React.Component{
         }
       }
     }
-    // merge teams
+    //convert team data structures if necessary
     if(versionLt(loadMetadata.version, '2.1.0')) {
       teamConversion2x1x0(loadTeams);
     }
+    if(versionLt(loadMetadata.version, '2.2.0')) {
+      teamConversion2x2x0(loadTeams);
+    }
+    // merge teams
     var teamsCopy = this.state.myTeams.slice();
     var newTeamCount = 0;
     for(var i in loadTeams) {
@@ -448,9 +604,9 @@ class MainInterface extends React.Component{
       }
       else {
         // merge rosters
-        for(var j in newTeam.roster) {
-          if(!oldTeam.roster.includes(newTeam.roster[j])) {
-            oldTeam.roster.push(newTeam.roster[j]);
+        for(var p in newTeam.roster) {
+          if(oldTeam.roster[p] == undefined) {
+            oldTeam.roster[p] = newTeam.roster[p];
           }
         }
         // merge division assignments
@@ -481,6 +637,7 @@ class MainInterface extends React.Component{
       settingsLoadToggle: !this.state.settingsLoadToggle
     });
     this.loadGameIndex(gamesCopy, false);
+    this.loadPlayerIndex(teamsCopy, gamesCopy, false);
     ipc.sendSync('unsavedData');
     ipc.sendSync('successfulMerge', newTeamCount, newGameCount, conflictGames);
   } // mergeTournament
@@ -523,14 +680,16 @@ class MainInterface extends React.Component{
     for(var p in this.state.divisions) {
       phaseColors[p] = PHASE_COLORS[phaseCnt++];
     }
+    var activeRpt = this.state.releasedRptList[this.state.activeRpt];
+    if(activeRpt == undefined) { activeRpt = this.state.customRptList[this.state.activeRpt]; }
 
     var standingsHtml = getStandingsHtml(this.state.myTeams, this.state.myGames,
-      endFileStart, phase, phaseToGroupBy, divsInPhase, this.state.settings);
+      endFileStart, phase, phaseToGroupBy, divsInPhase, this.state.settings, activeRpt);
     fs.writeFile(standingsLocation, standingsHtml, 'utf8', function(err) {
       if (err) { console.log(err); }
     });//writeFile - standings
     var individualsHtml = getIndividualsHtml(this.state.myTeams, this.state.myGames,
-      endFileStart, phase, phaseToGroupBy, usingDivisions, this.state.settings);
+      endFileStart, phase, phaseToGroupBy, usingDivisions, this.state.settings, activeRpt);
     fs.writeFile(individualsLocation, individualsHtml, 'utf8', function(err) {
       if (err) { console.log(err); }
     });//writeFile - individuals
@@ -540,17 +699,17 @@ class MainInterface extends React.Component{
       if (err) { console.log(err); }
     });//writeFile - scoreboard
     var teamDetailHtml = getTeamDetailHtml(this.state.myTeams, this.state.myGames,
-      endFileStart, phase, this.state.packets, this.state.settings, phaseColors);
+      endFileStart, phase, this.state.packets, this.state.settings, phaseColors, activeRpt);
     fs.writeFile(teamDetailLocation, teamDetailHtml, 'utf8', function(err) {
       if (err) { console.log(err); }
     });//writeFile - team detail
     var playerDetailHtml = getPlayerDetailHtml(this.state.myTeams, this.state.myGames,
-      endFileStart, phase, this.state.settings, phaseColors);
+      endFileStart, phase, this.state.settings, phaseColors, activeRpt);
     fs.writeFile(playerDetailLocation, playerDetailHtml, 'utf8', function(err) {
       if (err) { console.log(err); }
     });//writeFile - individual Detail
     var roundReportHtml = getRoundReportHtml(this.state.myTeams, this.state.myGames,
-      endFileStart, phase, this.state.packets, this.state.settings);
+      endFileStart, phase, this.state.packets, this.state.settings, activeRpt);
     fs.writeFile(roundReportLocation, roundReportHtml, 'utf8', function(err) {
       if (err) { console.log(err); }
     });//writeFile - round report
@@ -608,11 +767,11 @@ class MainInterface extends React.Component{
   selects "new tournament".
   ---------------------------------------------------------*/
   resetState() {
-    ipc.sendSync('toggleYearDisplay', false); // set back to default
     var defSettingsCopy = $.extend(true, {}, DEFAULT_SETTINGS);
     this.setState({
       tmWindowVisible: false,
       gmWindowVisible: false,
+      rptConfigWindowVisible: false,
       divWindowVisible: false,
       phaseWindowVisible: false,
       teamOrder: 'alpha',
@@ -623,6 +782,7 @@ class MainInterface extends React.Component{
       myTeams: [],
       myGames: [],
       gameIndex: {},
+      playerIndex: {},
       selectedTeams: [],
       selectedGames: [],
       checkTeamToggle: false,
@@ -637,8 +797,15 @@ class MainInterface extends React.Component{
       gmAddOrEdit: 'add',
       editingSettings: false,
       gameToBeDeleted: null,
-      yearDataExists: false
+      activeRpt: this.state.defaultRpt
+      // DO NOT reset these! These should persist throughout the session
+      // releasedRptList: ,
+      // customRptList: ,
+      // defaultRpt: ,
+      // modalsInitialized:
+      // formSettings
     });
+    ipc.sendSync('rebuildMenus', this.state.releasedRptList, this.state.customRptList, this.state.defaultRpt, this.state.formSettings);
   }
 
   //clear text from the search bar in order to show all teams/games
@@ -655,6 +822,7 @@ class MainInterface extends React.Component{
   ---------------------------------------------------------*/
   anyModalOpen() {
     return this.state.tmWindowVisible || this.state.gmWindowVisible ||
+      this.state.rptConfigWindowVisible ||
       this.state.divWindowVisible || this.state.phaseWindowVisible;
   }
 
@@ -746,6 +914,7 @@ class MainInterface extends React.Component{
     this.setState({
       gmWindowVisible: true
     });
+    $('#round').focus();
   }
 
   /*---------------------------------------------------------
@@ -756,6 +925,7 @@ class MainInterface extends React.Component{
     this.setState({
       tmWindowVisible: false,
       gmWindowVisible: false,
+      rptConfigWindowVisible: false,
       divWindowVisible: false,
       phaseWindowVisible: false,
       selectedTeams: [],
@@ -785,19 +955,17 @@ class MainInterface extends React.Component{
   addTeam(tempItem) {
     var tempTms = this.state.myTeams.slice();
     tempTms.push(tempItem);
-    var yearDataExists = this.state.yearDataExists;
     var settings = this.state.settings;
-    if(!this.state.settings.yearDisplay && !yearDataExists && teamHasYearData(tempItem)) {
-       yearDataExists = true;
-       ipc.sendSync('toggleYearDisplay', true); // assume user will want to show year data if they're entering it
-       settings.yearDisplay = true;
-     }
     ipc.sendSync('unsavedData');
+    //update player index
+    var tempIndex = this.state.playerIndex, teamName = tempItem.teamName;
+    tempIndex[teamName] = {};
+    for(var p in tempItem.roster) { tempIndex[teamName][p] = 0; }
     this.setState({
       myTeams: tempTms,
       tmWindowVisible: false,
-      yearDataExists: yearDataExists,
-      settings: settings
+      settings: settings,
+      playerIndex: tempIndex
     }) //setState
   } //addTeam
 
@@ -807,14 +975,17 @@ class MainInterface extends React.Component{
   addGame(tempItem) {
     var tempGms = this.state.myGames.slice();
     tempGms.push(tempItem);
-    var tempIndex = this.state.gameIndex;
+    var tempGameIndex = this.state.gameIndex;
     var round = tempItem.round;
-    if(tempIndex[round] == undefined) { tempIndex[round] = 1; }
-    else { tempIndex[round]++; }
+    if(tempGameIndex[round] == undefined) { tempGameIndex[round] = 1; }
+    else { tempGameIndex[round]++; }
+    var tempPlayerIndex = this.state.playerIndex;
+    addGameToPlayerIndex(tempItem, tempPlayerIndex); //statUtils2
     ipc.sendSync('unsavedData');
     this.setState({
       myGames: tempGms,
-      gameIndex: tempIndex,
+      gameIndex: tempGameIndex,
+      playerIndex: tempPlayerIndex,
       gmWindowVisible: false
     }) //setState
   } //addTeam
@@ -827,14 +998,12 @@ class MainInterface extends React.Component{
   ---------------------------------------------------------*/
   modifyTeam(oldTeam, newTeam) {
     var tempTeams = this.state.myTeams.slice();
-    var oldTeamIdx = _.indexOf(tempTeams, oldTeam);
-    tempTeams[oldTeamIdx] = newTeam;
     var tempGames = this.state.myGames.slice();
-    var originalNames = Object.keys(oldTeam), newNames = Object.keys(newTeam)
+    var originalNames = Object.keys(oldTeam.roster), newNames = Object.keys(newTeam.roster);
 
     for(var i in originalNames) {
       let oldn = originalNames[i], newn = newNames[i];
-      if(oldn != newn) {
+      if(oldn != newn) { //newn can be the empty string, if the user deleted players
         this.updatePlayerName(tempGames, oldTeam.teamName, oldn, newn);
       }
     }
@@ -843,21 +1012,27 @@ class MainInterface extends React.Component{
       this.updateTeamName(tempGames, oldTeam.teamName, newTeam.teamName);
     }
 
-    var yearDataExists = this.state.yearDataExists;
-    var settings = this.state.settings;
-    if(!this.state.settings.yearDisplay && !yearDataExists && teamHasYearData(newTeam)) {
-       yearDataExists = true;
-       ipc.sendSync('toggleYearDisplay', true); // assume user will want to show year data if they're entering it
-       settings.yearDisplay = true;
-     }
+    //update index
+    var tempPlayerIndex = this.state.playerIndex;
+    modifyTeamInPlayerIndex(oldTeam, newTeam, tempPlayerIndex); //statUtils2
+
+    //don't save the dummy placeholders for deleted teams
+    var deletedTeams = [];
+    for(var p in newTeam.roster) {
+      if(newTeam.roster[p].deleted != undefined) { deletedTeams.push(p); }
+    }
+    for(var i in deletedTeams) {
+      delete newTeam.roster[deletedTeams[i]];
+    }
+    var oldTeamIdx = _.indexOf(tempTeams, oldTeam);
+    tempTeams[oldTeamIdx] = newTeam;
 
     ipc.sendSync('unsavedData');
     this.setState({
       myTeams: tempTeams,
       myGames: tempGames,
       tmWindowVisible: false,
-      yearDataExists: yearDataExists,
-      settings: settings
+      playerIndex: tempPlayerIndex
     });
   }//modifyTeam
 
@@ -878,17 +1053,23 @@ class MainInterface extends React.Component{
 
   /*---------------------------------------------------------
   Change the name of team teamName's player oldPlayerName to
-  newPlayerName for all applicable games in gameAry
+  newPlayerName for all applicable games in gameAry.
+  Pass the empty string as newPlayerName in order to simply delete
+  this player
   ---------------------------------------------------------*/
   updatePlayerName(gameAry, teamName, oldPlayerName, newPlayerName) {
     for(var i in gameAry) {
       if(gameAry[i].forfeit) { continue; }
       if(teamName == gameAry[i].team1) {
-        gameAry[i].players1[newPlayerName] = gameAry[i].players1[oldPlayerName];
+        if(newPlayerName != '') {
+          gameAry[i].players1[newPlayerName] = gameAry[i].players1[oldPlayerName];
+        }
         delete gameAry[i].players1[oldPlayerName];
       }
       else if(teamName == gameAry[i].team2) {
-        gameAry[i].players2[newPlayerName] = gameAry[i].players2[oldPlayerName];
+        if(newPlayerName != '') {
+          gameAry[i].players2[newPlayerName] = gameAry[i].players2[oldPlayerName];
+        }
         delete gameAry[i].players2[oldPlayerName];
       }
     }
@@ -904,17 +1085,20 @@ class MainInterface extends React.Component{
      });
     tempGameAry[oldGameIdx] = newGame;
     // update game index
-    var tempIndex = this.state.gameIndex;
+    var tempGameIndex = this.state.gameIndex;
     var oldRound = oldGame.round, newRound = newGame.round;
     if(oldRound != newRound) {
-      if(tempIndex[newRound] == undefined) { tempIndex[newRound] = 1; }
-      else { tempIndex[newRound]++; }
-      if(--tempIndex[oldRound] == 0) { delete tempIndex[oldRound]; }
+      if(tempGameIndex[newRound] == undefined) { tempGameIndex[newRound] = 1; }
+      else { tempGameIndex[newRound]++; }
+      if(--tempGameIndex[oldRound] == 0) { delete tempGameIndex[oldRound]; }
     }
+    var tempPlayerIndex = this.state.playerIndex;
+    modifyGameInPlayerIndex(oldGame, newGame, tempPlayerIndex); //statUtils2
     ipc.sendSync('unsavedData');
     this.setState({
       myGames: tempGameAry,
-      gameIndex: tempIndex,
+      gameIndex: tempGameIndex,
+      playerIndex: tempPlayerIndex,
       gmWindowVisible: false
     });
   }
@@ -926,9 +1110,12 @@ class MainInterface extends React.Component{
   deleteTeam(item) {
     var newTeams = _.without(this.state.myTeams, item);
     var newSelected = _.without(this.state.selectedTeams, item);
+    var tempPlayerIndex = this.state.playerIndex;
+    delete tempPlayerIndex[item.teamName];
     this.setState({
       myTeams: newTeams,
-      selectedTeams: newSelected
+      selectedTeams: newSelected,
+      playerIndex: tempPlayerIndex
     });
     ipc.sendSync('unsavedData');
   } //deleteTeam
@@ -950,11 +1137,14 @@ class MainInterface extends React.Component{
     var allGames = this.state.myGames;
     var newGames = _.without(allGames, this.state.gameToBeDeleted);
     // update index
-    var tempIndex = this.state.gameIndex, round = this.state.gameToBeDeleted.round;
-    if(--tempIndex[round] == 0) { delete tempIndex[round]; }
+    var tempGameIndex = this.state.gameIndex, round = this.state.gameToBeDeleted.round;
+    if(--tempGameIndex[round] == 0) { delete tempGameIndex[round]; }
+    var tempPlayerIndex = this.state.playerIndex;
+    modifyGameInPlayerIndex(this.state.gameToBeDeleted, null, tempPlayerIndex); //statUtils2
     this.setState({
       myGames: newGames,
-      gameIndex: tempIndex,
+      gameIndex: tempGameIndex,
+      playerIndex: tempPlayerIndex,
       gameToBeDeleted: null
     });
     ipc.sendSync('unsavedData');
@@ -1051,19 +1241,32 @@ class MainInterface extends React.Component{
   }
 
   /*---------------------------------------------------------
-  Whether the given team has already played a game in the
-  given round.
+  Whether the given teams have already played in this round.
   originalGameLoaded: the game currently open for editing
+  Returns: 0 if neither team has
+  1 if teamA has
+  2 if teamB has
+  3 if both teams have
+  4 if both teams have already played each other in this round
   ---------------------------------------------------------*/
-  hasTeamPlayedInRound(teamName, roundNo, originalGameLoaded) {
+  haveTeamsPlayedInRound(teamA, teamB, roundNo, originalGameLoaded) {
+    var teamAPlayed = false, teamBPlayed = false;
     for(var i in this.state.myGames) {
       var g = this.state.myGames[i];
-      if(!gameEqual(g, originalGameLoaded) && g.round == roundNo &&
-        (g.team1 == teamName || g.team2 == teamName)) {
-        return true;
+      if(!gameEqual(g, originalGameLoaded) && g.round == roundNo) {
+        if((g.team1 == teamA && g.team2 == teamB) || (g.team2 == teamA && g.team1 == teamB)) {
+          return 4;
+        }
+        var teamAPlayed = teamAPlayed || (g.team1 == teamA || g.team2 == teamA);
+        var teamBPlayed = teamBPlayed || (g.team1 == teamB || g.team2 == teamB);
       }
     }
-    return false;
+    if(teamAPlayed) {
+      if(teamBPlayed) { return 3; }
+      return 1;
+    }
+    if(teamBPlayed) { return 2; }
+    return 0;
   }
 
   /*---------------------------------------------------------
@@ -1122,6 +1325,15 @@ class MainInterface extends React.Component{
     this.setState({
       viewingPhase: phase
     });
+  }
+
+  /*---------------------------------------------------------
+  Open or close the sidebar
+  ---------------------------------------------------------*/
+  toggleSidebar() {
+    this.setState({
+      sidebarOpen: !this.state.sidebarOpen
+    })
   }
 
   /*---------------------------------------------------------
@@ -1221,6 +1433,15 @@ class MainInterface extends React.Component{
     else { _.pull(tempSelGames, whichGame); }
     this.setState({
       selectedGames: tempSelGames
+    });
+  }
+
+  /*---------------------------------------------------------
+  Open the modal for configuring report settings
+  ---------------------------------------------------------*/
+  openRptConfigModal() {
+    this.setState({
+      rptConfigWindowVisible: true
     });
   }
 
@@ -1369,6 +1590,33 @@ class MainInterface extends React.Component{
   }
 
   /*---------------------------------------------------------
+  Does the search text match this team?
+  ---------------------------------------------------------*/
+  teamQueryMatch(queryText, team) {
+    var teamName = team.teamName.toLowerCase();
+    if(queryText.startsWith('=')) { return queryText.substr(1) == teamName; }
+    return teamName.indexOf(queryText)!=-1 || Object.keys(team.roster).join(', ').toLowerCase().indexOf(queryText)!=-1
+  }
+
+  /*---------------------------------------------------------
+  Does the search text match this game?
+  ---------------------------------------------------------*/
+  gameQueryMatch(queryText, game) {
+    if(queryText.length <= 1) { return this.gameBelongsToCurrentPhase(game); } // ignore 1-character searches for performance reasons
+    if(this.noPhaseQuery(queryText, game)) { return true; }
+    if(!this.gameBelongsToCurrentPhase(game)) { return false; }
+    var team1 = game.team1.toLowerCase(), team2 = game.team2.toLowerCase();
+    if(queryText.startsWith('=') && !queryText.includes('/')) { // '=' to require exact match
+      return team1 == queryText.substr(1) || team2 == queryText.substr(1);
+    }
+    return game.team1.toLowerCase().indexOf(queryText)!=-1 ||
+    game.team2.toLowerCase().indexOf(queryText)!=-1 ||
+    game.notes.toLowerCase().indexOf(queryText)!=-1 ||
+    this.matchRoundSearch(queryText,game) ||
+    this.matchBothTeams(queryText, game);
+  }
+
+  /*---------------------------------------------------------
   Returns true if the query text starts with "Round###" or
   "R###" and if the game's round matches ###
   ---------------------------------------------------------*/
@@ -1385,13 +1633,20 @@ class MainInterface extends React.Component{
   ---------------------------------------------------------*/
   matchBothTeams(queryText, game) {
     var matchFirst = false, matchSecond = false;
+    var team1 = game.team1.toLowerCase(), team2 = game.team2.toLowerCase();
     var words = queryText.split('/');
     words = words.map(function(str,idx) { return str.trim(); });
     words = _.without(words, '');
     if(words.length < 2) { return false; }
     for(var i in words) {
-      if(game.team1.toLowerCase().indexOf(words[i])!=-1) { matchFirst = true; }
-      else if(game.team2.toLowerCase().indexOf(words[i])!=-1) { matchSecond = true; }
+      if(words[i].startsWith('=')) {
+        if(team1 == words[i].substr(1)) { matchFirst = true; }
+        else if(team2 == words[i].substr(1)) { matchSecond = true; }
+      }
+      else {
+        if(team1.indexOf(words[i])!=-1) { matchFirst = true; }
+        else if(team2.indexOf(words[i])!=-1) { matchSecond = true; }
+      }
     }
     return matchFirst && matchSecond;
   }
@@ -1414,12 +1669,161 @@ class MainInterface extends React.Component{
     });
   }
 
+  /*---------------------------------------------------------
+  When the user clicks a team's name in the sidebar,
+  find that team's games. Or, if they just did that,
+  clear the search bar.
+  ---------------------------------------------------------*/
+  filterByTeam(teamName) {
+    var newQueryText = '';
+    if(this.state.queryText != '=' + teamName) {
+      newQueryText = '=' + teamName;
+    }
+    this.setState({
+      queryText: newQueryText,
+      navbarLoadToggle: !this.state.navbarLoadToggle
+    });
+  }
+
+  /*---------------------------------------------------------
+  Save the custom report configuration called rptName
+  to file.
+  If rptName is null, add the new configuration without
+  replacing an existing one
+  acceptAndStay is true if we want the modal to stay open,
+  false if not.
+  ---------------------------------------------------------*/
+  modifyRptConfig(rptName, rptObj, newName, acceptAndStay) {
+    var tempRpts = this.state.customRptList;
+    var activeRpt = this.state.activeRpt;
+    if(rptName != null) {
+      if(this.state.customRptList[rptName] == undefined) { return; }
+      delete tempRpts[rptName];
+      if(activeRpt == rptName) { activeRpt = newName; }
+    }
+    tempRpts[newName] = rptObj; //newName may or may not be the same as rptName
+    this.setState({
+      customRptList: tempRpts,
+      rptConfigWindowVisible: acceptAndStay,
+      activeRpt: activeRpt
+    });
+    var newCustomRpts = {
+        defaultRpt: this.state.defaultRpt,
+        rptConfigList: tempRpts
+    }
+    var saveSuccess = true;
+    fs.writeFile(this.state.customRptFile, JSON.stringify(newCustomRpts), 'utf8', (err) => {
+      if (err) {
+        saveSuccess = false;
+        console.log(err);
+      }
+    });
+    if(saveSuccess && acceptAndStay) {
+      M.toast({html: '<i class=\"material-icons\">check_circle</i>&emsp;Saved \"' + newName + '\"', classes: 'green-toast'});
+    }
+    ipc.sendSync('rebuildMenus', this.state.releasedRptList, tempRpts, activeRpt, this.state.formSettings);
+  }
+
+  /*---------------------------------------------------------
+  Set the default report configuration and write to file
+  ---------------------------------------------------------*/
+  setDefaultRpt(rptName) {
+    var newCustomRpts = {
+      defaultRpt: rptName,
+      rptConfigList: this.state.customRptList
+    }
+    this.setState({
+      defaultRpt: rptName,
+    });
+    var saveSuccess = true;
+    fs.writeFile(this.state.customRptFile, JSON.stringify(newCustomRpts), 'utf8', (err) => {
+      if (err) {
+        saveSuccess = false;
+        console.log(err);
+      }
+    });
+    if(saveSuccess) {
+      M.toast({html: '<i class=\"material-icons\">check_circle</i>&emsp;Set \"' + rptName + '\" as the default for new tournaments', classes: 'green-toast'});
+    }
+  }
+
+  /*---------------------------------------------------------
+  Set the default report configuration back to the original
+  default and write to file.
+  ---------------------------------------------------------*/
+  clearDefaultRpt() {
+    var newCustomRpts = {
+      defaultRpt: null,
+      rptConfigList: this.state.customRptList
+    }
+    this.setState({
+      defaultRpt: ORIG_DEFAULT_RPT_NAME,
+    });
+    var saveSuccess = true;
+    fs.writeFile(this.state.customRptFile, JSON.stringify(newCustomRpts), 'utf8', (err) => {
+      if (err) {
+        saveSuccess = false;
+        console.log(err);
+      }
+    });
+    if(saveSuccess) {
+      M.toast({html: '<i class=\"material-icons\">check_circle</i>&emsp;Removed default status', classes: 'green-toast'});
+    }
+  }
+
+  /*---------------------------------------------------------
+  Tell the main process to prompt the user to confirm that
+  they want to delete this rpt
+  ---------------------------------------------------------*/
+  rptDeletionPrompt(rptName) {
+    ipc.sendSync('rptDeletionPrompt', rptName);
+  }
+
+  /*---------------------------------------------------------
+  Delete a report configuration. Called after the user
+  confirms that they want to delete it.
+  ---------------------------------------------------------*/
+  deleteRpt(rptName) {
+    var tempRpts = this.state.customRptList;
+    var newDefault = this.state.defaultRpt;
+    var activeRpt = this.state.activeRpt;
+    delete tempRpts[rptName];
+    if(this.state.defaultRpt == rptName) { newDefault = ORIG_DEFAULT_RPT_NAME; }
+    if(this.state.activeRpt == rptName) { activeRpt = ORIG_DEFAULT_RPT_NAME; }
+    this.setState({
+      customRptList: tempRpts,
+      defaultRpt: newDefault,
+      activeRpt: activeRpt
+    });
+
+    var newCustomRpts = {
+      defaultRpt: newDefault == ORIG_DEFAULT_RPT_NAME ? null : newDefault,
+      rptConfigList: tempRpts
+    }
+    fs.writeFile(this.state.customRptFile, JSON.stringify(newCustomRpts), 'utf8', (err) => {
+      if (err) { console.log(err); }
+    });
+    ipc.sendSync('rebuildMenus', this.state.releasedRptList, tempRpts, activeRpt, this.state.formSettings);
+  }
+
+  /*---------------------------------------------------------
+  Turn on and off settings for which optional entry fields
+  should appear
+  ---------------------------------------------------------*/
+  toggleFormField(whichField, status) {
+    var tempFormSettings = this.state.formSettings;
+    tempFormSettings[whichField] = status;
+    this.setState({
+      formSettings: tempFormSettings
+    });
+  }
+
 
 
   render() {
     var filteredTeams = [];
     var filteredGames = [];
-    var queryText = this.state.queryText.trim();
+    var queryText = this.state.queryText.trim().toLowerCase();
     var myTeams = this.state.myTeams;
     var myGames = this.state.myGames;
     var activePane = this.state.activePane;
@@ -1428,28 +1832,36 @@ class MainInterface extends React.Component{
     var usingDivisions = this.usingDivisions();
     var phaseToGroupBy = this.state.viewingPhase == 'all' ? this.state.settings.defaultPhase : this.state.viewingPhase;
     var divsInPhase = this.state.divisions[phaseToGroupBy];
+    var rptObj = this.state.releasedRptList[this.state.activeRpt];
+    if(rptObj == undefined) { rptObj = this.state.customRptList[this.state.activeRpt]; }
 
     // Get Materialize features to show up correctly
     $(document).ready(function() { $('.tooltipped').tooltip(); });//initialize tooltips
     $('select').formSelect(); //initialize all dropdowns
     $('.fixed-action-btn').floatingActionButton(); //initialize floating buttons
     //initialize all modals
-    $('.modal').modal({
+    if(!this.state.modalsInitialized) {
+      $('#addTeam, #addGame, #rptConfig').modal({
+        onCloseEnd: this.onModalClose
+      });
+    }
+    //for some reason, Materialize code will crash if I only initialize these once
+    //perhaps one day I will figure out why
+    $('#assignDivisions, #assignPhases').modal({
       onCloseEnd: this.onModalClose
     });
+    //open modals if appropriate
     if(this.state.tmWindowVisible === true) { $('#addTeam').modal('open'); }
     if(this.state.gmWindowVisible === true) { $('#addGame').modal('open'); }
     if(this.state.divWindowVisible === true) { $('#assignDivisions').modal('open'); }
     if(this.state.phaseWindowVisible === true) { $('#assignPhases').modal('open'); }
+    if(this.state.rptConfigWindowVisible === true) { $('#rptConfig').modal('open'); }
 
     //sort and filter teams
     if (activePane == 'teamsPane') {
       //Filter list of teams
       for (var i = 0; i < myTeams.length; i++) {
-        if (
-          ((myTeams[i].teamName.toLowerCase().indexOf(queryText)!=-1) ||
-          (Object.keys(myTeams[i].roster).join(', ').toLowerCase().indexOf(queryText)!=-1))
-        ) {
+        if (this.teamQueryMatch(queryText, myTeams[i])) {
           filteredTeams.push(myTeams[i]);
         }
       }
@@ -1472,14 +1884,7 @@ class MainInterface extends React.Component{
     else if (activePane == 'gamesPane') {
       //Filter list of games
       for (var i = 0; i < myGames.length; i++) {
-        if (this.noPhaseQuery(queryText, myGames[i]) ||
-          ((myGames[i].team1.toLowerCase().indexOf(queryText)!=-1 ||
-          myGames[i].team2.toLowerCase().indexOf(queryText)!=-1 ||
-          myGames[i].notes.toLowerCase().indexOf(queryText)!=-1 ||
-          this.matchRoundSearch(queryText, myGames[i]) ||
-          this.matchBothTeams(queryText, myGames[i])) &&
-          this.gameBelongsToCurrentPhase(myGames[i]))
-        ) {
+        if (this.gameQueryMatch(queryText, myGames[i])) {
           filteredGames.push(myGames[i]);
         }
       }
@@ -1528,6 +1933,24 @@ class MainInterface extends React.Component{
     // to prevent player stats from updating before I tell them to
     var gameToLoadCopy = this.state.editWhichGame == null ? null : $.extend(true, {}, this.state.editWhichGame);
 
+    var mainWindowClass = this.state.sidebarOpen ? 'col s12 xl8' : 'col s12';
+
+    var sidebar = null;
+    if(this.state.sidebarOpen) {
+      sidebar = (
+        <div id="stat-sidebar" className="col xl4 s0">
+          <StatSidebar
+            visible = {this.state.sidebarOpen}
+            standings = {getSmallStandings(myTeams, myGames, this.state.viewingPhase, phaseToGroupBy, this.state.settings)}
+            divisions = {divsInPhase}
+            settings = {this.state.settings}
+            activeRpt = {rptObj}
+            filterByTeam = {this.filterByTeam}
+          />
+        </div>
+      );
+    }
+
     return(
       <div className="application">
         <div className="interface">
@@ -1542,6 +1965,8 @@ class MainInterface extends React.Component{
             isOpen = {this.state.tmWindowVisible}
             validateTeamName = {this.validateTeamName}
             teamHasGames = {this.teamHasPlayedGames}
+            playerIndex = {this.state.playerIndex}
+            formSettings = {this.state.formSettings}
           />
           <AddGameModal
             gameToLoad = {gameToLoadCopy}
@@ -1553,11 +1978,24 @@ class MainInterface extends React.Component{
             onForceReset = {this.onForceReset}
             isOpen = {this.state.gmWindowVisible}
             teamData = {myTeams.slice()}
-            hasTeamPlayedInRound = {this.hasTeamPlayedInRound}
+            haveTeamsPlayedInRound = {this.haveTeamsPlayedInRound}
             allPhases = {Object.keys(this.state.divisions)}
             currentPhase = {this.state.viewingPhase}
             settings = {this.state.settings}
           />
+         <RptConfigModal
+            isOpen = {this.state.rptConfigWindowVisible}
+            tournamentSettings = {this.state.settings}
+            releasedRptList = {this.state.releasedRptList}
+            customRptList = {this.state.customRptList}
+            defaultRpt = {this.state.defaultRpt}
+            modifyRptConfig = {this.modifyRptConfig}
+            setDefaultRpt = {this.setDefaultRpt}
+            clearDefaultRpt = {this.clearDefaultRpt}
+            attemptDeletion = {this.rptDeletionPrompt}
+            originalDefault = {ORIG_DEFAULT_RPT_NAME}
+            usingDivisions = {usingDivisions}
+         />
          <DivAssignModal key={JSON.stringify(this.state.divisions) + this.state.checkTeamToggle}
             isOpen = {this.state.divWindowVisible}
             teamsToAssign = {this.state.selectedTeams}
@@ -1573,8 +2011,8 @@ class MainInterface extends React.Component{
           />
 
           <div className="row">
-            <div id="main-window" className="col s12 m12 l8">
-              <HeaderNav
+            <div id="main-window" className={mainWindowClass}>
+              <HeaderNav key={'nav' + this.state.navbarLoadToggle}
                 onSearch= {this.searchLists}
                 setPane = {this.setPane}
                 setPhase = {this.setPhase}
@@ -1585,6 +2023,7 @@ class MainInterface extends React.Component{
                 usingDivisions = {usingDivisions}
                 openDivModal = {this.openDivModal}
                 openPhaseModal = {this.openPhaseModal}
+                queryText = {this.state.queryText}
               />
               <SettingsForm key = {this.state.settingsLoadToggle}
                 whichPaneActive = {activePane}
@@ -1617,14 +2056,12 @@ class MainInterface extends React.Component{
                 totalGames = {myGames.length}
                 numberSelected = {this.state.selectedGames.length}
               />
-            </div>
-            <div id="stat-sidebar" className="col l4 hide-on-med-and-down">
-              <StatSidebar
-                standings = {getSmallStandings(myTeams, myGames, this.state.viewingPhase, phaseToGroupBy, this.state.settings)}
-                divisions = {divsInPhase}
-                settings = {this.state.settings}
+              <SidebarToggleButton
+                toggle = {this.toggleSidebar}
+                sidebarOpen = {this.state.sidebarOpen}
               />
             </div>
+            {sidebar}
 
           </div>
         </div>{/* interface */}

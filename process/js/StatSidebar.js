@@ -21,6 +21,19 @@ var _ = require('lodash');
 
 class StatSidebar extends React.Component{
 
+  constructor(props) {
+    super(props);
+    this.filterByTeam = this.filterByTeam.bind(this);
+  }
+
+  /*---------------------------------------------------------
+  When a team's name is clicked on, filter the list of games
+  ---------------------------------------------------------*/
+  filterByTeam(e) {
+    var teamName = e.target.name;
+    this.props.filterByTeam(teamName);
+  }
+
   /*---------------------------------------------------------
   Sort by winning percentage, then by ppg
   ---------------------------------------------------------*/
@@ -52,10 +65,12 @@ class StatSidebar extends React.Component{
   }
 
   /*---------------------------------------------------------
-  Points, per game. Zero if no games played.
+  Points, per game or 20 TUH. Zero if no games played.
   ---------------------------------------------------------*/
   getPpg(t) {
-    return this.getGamesPlayed(t) == 0 ? 0 : (t.points / this.getGamesPlayed(t));
+    if(this.getGamesPlayed(t) == 0) { return 0; }
+    if(this.props.activeRpt.ppgOrPp20 == 'pp20') { return 20 * t.points / t.tuh; }
+    return t.points / this.getGamesPlayed(t);
   }
 
   /*---------------------------------------------------------
@@ -82,14 +97,19 @@ class StatSidebar extends React.Component{
     divisions
   ---------------------------------------------------------*/
   getTable(teams, division) {
+    var tiesExist = this.tiesExist();
+    var usePp20 = this.props.activeRpt.ppgOrPp20 == 'pp20';
     var rows = teams.map((item, index) => {
       var ppg = this.getPpg(item);
       var ppb = this.getPpb(item);
       var ppbCell = this.props.settings.bonuses == 'none' ? null : ( <td>{ppb.toFixed(2)}</td> );
-      var tiesCell = this.tiesExist() ? ( <td>{item.ties}</td> ) : null;
+      var tiesCell = tiesExist ? ( <td>{item.ties}</td> ) : null;
       return (
         <tr key={item.teamName}>
-          <td className="text-cell">{item.teamName}</td>
+          <td className="text-cell">
+            <a onClick={this.filterByTeam} name={item.teamName}
+            title="Find this team's games">{item.teamName}</a>
+          </td>
           <td>{item.wins}</td>
           <td>{item.losses}</td>
           {tiesCell}
@@ -100,7 +120,7 @@ class StatSidebar extends React.Component{
     });
     var header = division == 'noDiv' ? null : ( <h5>{division}</h5> );
     var ppbThCell = this.props.settings.bonuses == 'none' ? null : ( <th>PPB</th> );
-    var tiesThCell = this.tiesExist() ? ( <th>T</th> ) : null;
+    var tiesThCell = tiesExist ? ( <th>T</th> ) : null;
     return (
       <div key={division}>
         {header}
@@ -111,7 +131,7 @@ class StatSidebar extends React.Component{
               <th>W</th>
               <th>L</th>
               {tiesThCell}
-              <th>PPG</th>
+              <th>{usePp20 ? 'PP20' : 'PPG'}</th>
               {ppbThCell}
             </tr>
           </thead>
@@ -125,6 +145,9 @@ class StatSidebar extends React.Component{
 
 
   render(){
+    if(!this.props.visible) { return null; }
+    if(this.props.activeRpt == undefined) { return ( <span>Report configuration error</span> ); }
+
     var sortedSummary = this.standingsSort(this.props.standings.slice());
     var tables = [];
     if(this.props.divisions != undefined && this.props.divisions.length > 0) {

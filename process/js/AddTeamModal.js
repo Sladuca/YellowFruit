@@ -18,8 +18,12 @@ class AddTeamModal extends React.Component{
     super(props);
     this.state = {
       teamName: '',
+      teamUGStatus: false,
+      teamD2Status: false,
       playerNames: [],
       playerYears: [],
+      playerUGStatuses: [],
+      playerD2Statuses: [],
       divisions: {},
       originalTeamLoaded: null
     };
@@ -29,6 +33,8 @@ class AddTeamModal extends React.Component{
     this.handleChange = this.handleChange.bind(this);
     this.handlePlayerChange = this.handlePlayerChange.bind(this);
     this.handleYearChange = this.handleYearChange.bind(this);
+    this.handlePlayerUGChange = this.handlePlayerUGChange.bind(this);
+    this.handlePlayerD2Change = this.handlePlayerD2Change.bind(this);
     this.validateTeam = this.validateTeam.bind(this);
   }
 
@@ -52,16 +58,23 @@ class AddTeamModal extends React.Component{
   }
 
   /*---------------------------------------------------------
-  Called when the value in the team name field changes.
-  This is a controlled component, so the state is the
-  single source of truth.
+  Called when the value in on of the team-level fields
+  changes. This is a controlled component, so the state is
+  the single source of truth.
   ---------------------------------------------------------*/
   handleChange(e) {
     const target = e.target;
-    const value = target.value;
+    const value = target.type === 'checkbox' ? target.checked : target.value;
     const name = target.name;
     var partialState = {};
     partialState[name] = value;
+    var playerUGStatuses = this.state.playerUGStatuses.slice();
+    var playerD2Statuses = this.state.playerD2Statuses.slice();
+    // mark every player as D2 if the whole team was just marked as D2
+    if(name == 'teamD2Status' && value) {
+      for(var i in this.state.playerNames) { playerD2Statuses[i] = true; }
+      partialState.playerD2Statuses = playerD2Statuses;
+    }
     this.setState(partialState);
   } //handleChange
 
@@ -73,15 +86,29 @@ class AddTeamModal extends React.Component{
     const value = target.value;
     const name = target.name;
     var whichPlayer = name.replace('player', '');
+    var previousValue = this.state.playerNames[whichPlayer];
     var tempPlayers = this.state.playerNames.slice();
     tempPlayers[whichPlayer] = value;
     for(var last=tempPlayers.pop(); last==''; last=tempPlayers.pop()) { } // remove blank lines
     if(last != undefined) { tempPlayers.push(last); }
     var tempYears = this.state.playerYears.slice();
-    if(tempYears[whichPlayer] == undefined) { tempYears[whichPlayer] = ''; } // initialize year field
+    var tempD2Statuses = this.state.playerD2Statuses.slice();
+    var tempUGStatuses = this.state.playerUGStatuses.slice();
+    //initialize the other fields
+    if(tempYears[whichPlayer] == undefined) { tempYears[whichPlayer] = ''; }
+    if(tempUGStatuses[whichPlayer] == undefined) { tempUGStatuses[whichPlayer] = false; }
+    if(tempD2Statuses[whichPlayer] == undefined) { tempD2Statuses[whichPlayer] = this.state.teamD2Status; }
+    // remove other data for the blank lines we removed earlier
+    var newPlayerCnt = tempPlayers.length;
+    var deletedLines = this.state.playerNames.length - newPlayerCnt;
+    tempYears = tempYears.slice(0, newPlayerCnt + (deletedLines < 2));
+    tempUGStatuses = tempUGStatuses.slice(0, newPlayerCnt + (deletedLines < 2));
+    tempD2Statuses = tempD2Statuses.slice(0, newPlayerCnt + (deletedLines < 2));
     this.setState({
       playerNames: tempPlayers,
-      playerYears: tempYears
+      playerYears: tempYears,
+      playerUGStatuses: tempUGStatuses,
+      playerD2Statuses: tempD2Statuses
     });
   }
 
@@ -101,6 +128,41 @@ class AddTeamModal extends React.Component{
   }
 
   /*---------------------------------------------------------
+  Called when a value in the list of player UG statuses
+  changes.
+  ---------------------------------------------------------*/
+  handlePlayerUGChange(e) {
+    const target = e.target;
+    const value = target.checked;
+    const name = target.name;
+    var whichPlayer = name.replace('ug', '');
+    var tempStatuses = this.state.playerUGStatuses.slice();
+    tempStatuses[whichPlayer] = value;
+    var partialState = {};
+    partialState.playerUGStatuses = tempStatuses;
+    this.setState(partialState);
+  }
+
+  /*---------------------------------------------------------
+  Called when a value in the list of player d2 statuses
+  changes.
+  ---------------------------------------------------------*/
+  handlePlayerD2Change(e) {
+    const target = e.target;
+    const value = target.checked;
+    const name = target.name;
+    var whichPlayer = name.replace('d2', '');
+    var tempStatuses = this.state.playerD2Statuses.slice();
+    tempStatuses[whichPlayer] = value;
+    var partialState = {};
+    partialState.playerD2Statuses = tempStatuses;
+    if(whichPlayer < this.state.playerNames.length && !value) {
+      partialState.teamD2Status = false; // team can't be D2 if one of its players isn't
+    }
+    this.setState(partialState);
+  }
+
+  /*---------------------------------------------------------
   Once we're done with the form, clear the data.
   ---------------------------------------------------------*/
   resetState() {
@@ -108,6 +170,10 @@ class AddTeamModal extends React.Component{
       teamName: '',
       playerNames: [],
       playerYears: [],
+      teamUGStatus: false,
+      teamD2Status: false,
+      playerUGStatuses: [],
+      playerD2Statuses: [],
       divisions: {},
       originalTeamLoaded: null
     });
@@ -119,14 +185,20 @@ class AddTeamModal extends React.Component{
   which team to modify.
   ---------------------------------------------------------*/
   loadTeam() {
-    var years = [];
+    var years = [], ugStatuses = [], div2Statuses = [];
     for(var p in this.props.teamToLoad.roster) {
-      years.push(this.props.teamToLoad.roster[p].year)
+      years.push(this.props.teamToLoad.roster[p].year);
+      div2Statuses.push(this.props.teamToLoad.roster[p].div2);
+      ugStatuses.push(this.props.teamToLoad.roster[p].undergrad);
     }
     this.setState({
       teamName: this.props.teamToLoad.teamName,
+      teamUGStatus: this.props.teamToLoad.teamUGStatus,
+      teamD2Status: this.props.teamToLoad.teamD2Status,
       playerNames: Object.keys(this.props.teamToLoad.roster),
       playerYears: years,
+      playerUGStatuses: ugStatuses,
+      playerD2Statuses: div2Statuses,
       divisions: this.props.teamToLoad.divisions,
       originalTeamLoaded: this.props.teamToLoad
     });
@@ -141,18 +213,29 @@ class AddTeamModal extends React.Component{
     e.preventDefault();
     if(!this.props.isOpen) { return; } //keyboard shortcut shouldn't work here
     //trim each player name, then remove blank lines
-    var nameAry = [], yearAry = [], roster = {};
+    var roster = {};
+    var count = 0, playerDeleted = false;
     for(var i in this.state.playerNames) {
       var name = this.state.playerNames[i].trim();
-      if(name != '') {
-        nameAry.push(name);
-        yearAry.push(this.state.playerYears[i].trim());
-        roster[name] = {year: this.state.playerYears[i].trim()};
+      if(name != '' || (this.props.addOrEdit == 'edit' && i < Object.keys(this.state.originalTeamLoaded.roster).length)) {
+        //if editing existing team, need to keep empty lines so we know which players were deleted
+        if(name == '') {
+          roster['deletedPlayerPlaceholder'+(count++)] = {deleted: true};
+        } // dummy name, so we don't have duplicates if the user just deleted two players
+        else {
+          roster[name] = {
+            year: this.state.playerYears[i].trim(),
+            undergrad: this.state.playerUGStatuses[i],
+            div2: this.state.playerD2Statuses[i]
+          };
+        }
       }
     }
 
     var tempItem = {
       teamName: this.state.teamName.trim(),
+      teamUGStatus: this.state.teamUGStatus,
+      teamD2Status: this.state.teamD2Status,
       roster: roster,
       divisions: this.state.divisions
     } //tempitems
@@ -209,17 +292,20 @@ class AddTeamModal extends React.Component{
   }
 
   /*---------------------------------------------------------
-  Returns true if user has tried to delete a player from a
-  team that already has games entered.
+  Returns true if user has tried to delete a player that has
+  already played in at least one game
   ---------------------------------------------------------*/
   illegalEdit() {
     if(this.props.teamToLoad != null || this.props.addOrEdit == 'add') { return false; }
-    var playerDeleted = false;
-    for(var i in this.state.originalTeamLoaded.playerNames) {
-      var p = this.state.playerNames[i];
-      if(p == undefined || p.trim() == '') { playerDeleted = true; }
+    var playerDeleted = null;
+    var originalNames = Object.keys(this.state.originalTeamLoaded.roster);
+    for(var i in originalNames) {
+      var currentName = this.state.playerNames[i];
+      if(currentName == undefined || currentName.trim() == '') { playerDeleted = originalNames[i]; }
     }
-    return this.props.teamHasGames(this.state.originalTeamLoaded) && playerDeleted;
+    if(playerDeleted == null) { return false; }
+    return this.props.playerIndex[this.state.originalTeamLoaded.teamName][playerDeleted] > 0;
+    // return this.props.teamHasGames(this.state.originalTeamLoaded) && playerDeleted;
   }
 
   /*---------------------------------------------------------
@@ -236,7 +322,7 @@ class AddTeamModal extends React.Component{
     if(this.state.teamName.trim() == '') { return [false, '', '']; } //team name can't be just whitespace
     if(this.hasNoPlayers()) { return [false, '', '']; } //likewise for playerNames
     if(this.illegalEdit()) {
-      return [false, 'error', 'You may not remove players from a team that has played games'];
+      return [false, 'error', 'You may not remove players that have already played in a game'];
     }
     // fairly aribitrary limit to make sure no one does anything ridiculous
     if(this.state.playerNames.length > MAX_PLAYERS_PER_TEAM) {
@@ -285,7 +371,8 @@ class AddTeamModal extends React.Component{
   }
 
   /*---------------------------------------------------------
-  The list of text fields conaining the roster.
+  The list of text fields containing the grades/years of
+  each player.
   ---------------------------------------------------------*/
   getYearFields() {
     var tempYears = this.state.playerNames.map((name, idx) => { return this.state.playerYears[idx]; });
@@ -305,20 +392,92 @@ class AddTeamModal extends React.Component{
   }
 
   /*---------------------------------------------------------
+  The list of checkboxes denoting the undergrad status of
+  each player
+  ---------------------------------------------------------*/
+  getUGFields() {
+    var tempStatuses = this.state.playerNames.map((name, idx) => { return this.state.playerUGStatuses[idx]; });
+    if(this.state.playerUGStatuses.length > tempStatuses.length) {
+      tempStatuses.push(this.state.playerUGStatuses[tempStatuses.length]);
+    }
+    else { tempStatuses.push(false); }
+    var ugFields = tempStatuses.map((status, idx) => {
+      return (
+        <div key={idx} className="player-d2-checkbox">
+          <label>
+            <input id={'ug'+idx} type="checkbox" name={'ug'+idx} checked={status} onChange={this.handlePlayerUGChange}/>
+            <span>UG</span>
+          </label>
+        </div>
+      );
+    });
+    return ugFields;
+  }
+
+  /*---------------------------------------------------------
+  The list of checkboxes denoting the Div. 2 status of
+  each player
+  ---------------------------------------------------------*/
+  getD2Fields() {
+    var tempStatuses = this.state.playerNames.map((name, idx) => { return this.state.playerD2Statuses[idx]; });
+    if(this.state.playerD2Statuses.length > tempStatuses.length) {
+      tempStatuses.push(this.state.playerD2Statuses[tempStatuses.length]);
+    }
+    else { tempStatuses.push(false); }
+    var d2Fields = tempStatuses.map((status, idx) => {
+      return (
+        <div key={idx} className="player-d2-checkbox">
+          <label>
+            <input id={'d2'+idx} type="checkbox" name={'d2'+idx} checked={status} onChange={this.handlePlayerD2Change}/>
+            <span>D2</span>
+          </label>
+        </div>
+      );
+    });
+    return d2Fields;
+  }
+
+  /*---------------------------------------------------------
   Put the sets of fields together into a series of row
   elements
   ---------------------------------------------------------*/
-  constructRosterTable(playerFields, yearFields) {
+  constructRosterTable(playerFields, yearFields, ugFields, d2Fields) {
+    var numCheckBoxes = (+this.props.formSettings.playerUG) + (+this.props.formSettings.playerD2);
+    var yearWidth = this.props.formSettings.year ? 3 : 0;
+    var nameWidthL = 12 - yearWidth - numCheckBoxes;
+    var nameWidthS = 12 - yearWidth - 2*numCheckBoxes;
     var rows = [];
     for(var i in playerFields) {
-      var oneRow = (
-        <div key={i} className="row">
-          <div className="col s9">
-            {playerFields[i]}
-          </div>
+      var yearField = null, ugField = null, d2Field = null;
+      if(this.props.formSettings.year) {
+        yearField = (
           <div className="col s3">
             {yearFields[i]}
           </div>
+        );
+      }
+      if(this.props.formSettings.playerUG) {
+        ugField = (
+          <div className="col l1 s2">
+            {ugFields[i]}
+          </div>
+        );
+      }
+      if(this.props.formSettings.playerD2) {
+        d2Field = (
+          <div className="col l1 s2">
+            {d2Fields[i]}
+          </div>
+        );
+      }
+      var oneRow = (
+        <div key={i} className="row">
+          <div className={'col l' + nameWidthL + ' s' + nameWidthS}>
+            {playerFields[i]}
+          </div>
+          {yearField}
+          {ugField}
+          {d2Field}
         </div>
       );
       rows.push(oneRow);
@@ -331,7 +490,9 @@ class AddTeamModal extends React.Component{
   render() {
     var playerFields = this.getPlayerFields();
     var yearFields = this.getYearFields();
-    var rosterTable = this.constructRosterTable(playerFields, yearFields);
+    var ugFields = this.getUGFields();
+    var d2Fields = this.getD2Fields();
+    var rosterTable = this.constructRosterTable(playerFields, yearFields, ugFields, d2Fields);
 
     var [teamIsValid, errorLevel, errorMessage] = this.validateTeam();
     var errorIcon = this.getErrorIcon(errorLevel);
@@ -348,11 +509,31 @@ class AddTeamModal extends React.Component{
         <form onSubmit={this.handleAdd}>
           <div className="modal-content">
             <h4>{this.getModalHeader()}</h4>
-              <div className="input-field">
-                <input type="text" id="teamName" name="teamName" onChange={this.handleChange} value={this.state.teamName}/>
-                <label htmlFor="teamName">Team Name</label>
+            <div className="row">
+              <div className="col l10 s8">
+                <div className="input-field">
+                  <input type="text" id="teamName" name="teamName" onChange={this.handleChange} value={this.state.teamName}/>
+                  <label htmlFor="teamName">Team Name</label>
+                </div>
               </div>
-            <span>Roster</span>
+              <div className="col l1 s2">
+                <div className="team-level-checkbox">
+                  <label>
+                    <input id="teamUGStatus" type="checkbox" name="teamUGStatus" checked={this.state.teamUGStatus} onChange={this.handleChange}/>
+                    <span>UG</span>
+                  </label>
+                </div>
+              </div>
+              <div className="col l1 s2">
+                <div className="team-level-checkbox">
+                  <label>
+                    <input id="teamD2Status" type="checkbox" name="teamD2Status" checked={this.state.teamD2Status} onChange={this.handleChange}/>
+                    <span>D2</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <h5>Roster</h5>
             {rosterTable}
           </div> {/* modal content */}
           <div className="modal-footer">
